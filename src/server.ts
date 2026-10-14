@@ -14,10 +14,17 @@ import { registerBusinessTools } from "./tools/business.js";
 import { registerPublicDataTools } from "./tools/public-data.js";
 import { registerLegalTools } from "./tools/legal.js";
 import { registerDisasterTools } from "./tools/disaster.js";
+import {
+  createFundingProviderFromEnvironment,
+  type FundingProvider,
+} from "./funding/provider.js";
+import { registerFundingTools } from "./funding/tools.js";
 
 export interface CreateServerOptions {
   /** Custom data provider (defaults to StubDataProvider for development) */
   provider?: DataProvider;
+  /** Separate local-Core funding adapter. Legacy DataProvider behavior is unchanged. */
+  fundingProvider?: FundingProvider;
 }
 
 /**
@@ -25,6 +32,8 @@ export interface CreateServerOptions {
  */
 export function createServer(options: CreateServerOptions = {}): McpServer {
   const provider = options.provider ?? new StubDataProvider();
+  const fundingProvider =
+    options.fundingProvider ?? createFundingProviderFromEnvironment();
 
   const server = new McpServer({
     name: "agentlink-korea",
@@ -37,6 +46,7 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
   registerPublicDataTools(server, provider);
   registerLegalTools(server, provider);
   registerDisasterTools(server, provider);
+  registerFundingTools(server, fundingProvider);
 
   return server;
 }
