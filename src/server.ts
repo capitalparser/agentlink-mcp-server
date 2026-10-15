@@ -14,10 +14,15 @@ import { registerBusinessTools } from "./tools/business.js";
 import { registerPublicDataTools } from "./tools/public-data.js";
 import { registerLegalTools } from "./tools/legal.js";
 import { registerDisasterTools } from "./tools/disaster.js";
+import { TaxDomainClient } from "./domains/tax/bridge.js";
+import type { TaxDomainClientLike } from "./domains/tax/bridge.js";
+import { registerTaxDomainTools } from "./domains/tax/tools.js";
 
 export interface CreateServerOptions {
   /** Custom data provider (defaults to StubDataProvider for development) */
   provider?: DataProvider;
+  /** Tax domain MCP client (defaults to a lazy stdio client configured from env) */
+  taxDomainClient?: TaxDomainClientLike;
 }
 
 /**
@@ -37,6 +42,15 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
   registerPublicDataTools(server, provider);
   registerLegalTools(server, provider);
   registerDisasterTools(server, provider);
+
+  // Tax domain bridge (lazy: the child process starts on first call)
+  const taxClient = options.taxDomainClient ?? new TaxDomainClient();
+  registerTaxDomainTools(server, taxClient);
+  const prevOnClose = server.server.onclose;
+  server.server.onclose = () => {
+    void taxClient.close();
+    prevOnClose?.();
+  };
 
   return server;
 }

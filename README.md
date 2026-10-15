@@ -85,6 +85,24 @@ npm run build
 npm run dev
 ```
 
+## 세무 도메인 연결
+
+`agentlink-domain-tax-mcp`(Python stdio MCP 서버)를 로컬 stdio 브리지로 연결합니다. 자식 프로세스는 첫 호출 시 지연 실행되며 서버 종료 시 함께 종료됩니다. 기존 스텁 세무 도구(`get_vat_data` 등)는 그대로 유지됩니다.
+
+| 환경 변수 | 설명 | 기본값 |
+|---|---|---|
+| `AGENTLINK_TAX_MCP_COMMAND` | 실행 명령 | `python3` |
+| `AGENTLINK_TAX_MCP_ARGS` | 인자 (JSON 배열) | `["-m","agentlink_tax.server"]` |
+| `AGENTLINK_TAX_MCP_PYTHONPATH` | 자식 프로세스 `PYTHONPATH` (선택) | - |
+
+자식 프로세스에는 `PATH, HOME, LANG, LC_ALL, TZ, TMPDIR, PYTHONPATH, AGENTLINK_CREDENTIALS_PATH, AGENTLINK_TAX_REGISTRY, HTTPS_PROXY, HTTP_PROXY, NO_PROXY`(소문자 변형 포함), `SSL_CERT_FILE, REQUESTS_CA_BUNDLE`만 전달됩니다.
+
+도메인 레지스트리를 찾을 수 있어야 합니다: 도메인 패키지를 editable 설치하거나, `AGENTLINK_TAX_REGISTRY`를 지정하거나, `AGENTLINK_TAX_MCP_PYTHONPATH`(또는 `PYTHONPATH`)를 소스 트리로 지정하세요.
+
+도구 (모두 읽기 전용): `tax_list_workflows`, `tax_get_workflow_contract`, `tax_plan_work`, `tax_list_rule_cards`, `tax_search_law`, `tax_check_business_status`. 성공 결과는 도메인 서버의 `structuredContent`를 그대로 반환하며(오류 결과의 원문은 전달하지 않고 고정된 안전한 메시지의 `TAX_DOMAIN_TOOL_ERROR`로 대체), 초안일 뿐 적용 여부는 판단되지 않고 세액은 계산하지 않습니다. 호출 제한시간은 30초이며, 실패 시 `tax-bridge-error.v1` (`TAX_DOMAIN_UNAVAILABLE` / `TAX_DOMAIN_TIMEOUT` / `TAX_DOMAIN_TOOL_ERROR` / `TAX_DOMAIN_ERROR`)을 반환합니다.
+
+상태: 로컬 stdio 브리지 (원격/호스팅 미지원).
+
 ## Architecture
 
 ```
