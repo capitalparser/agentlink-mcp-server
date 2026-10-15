@@ -11,7 +11,7 @@ import { createServer } from "../../dist/server.js";
 import { TaxDomainClient } from "../../dist/domains/tax/bridge.js";
 
 const TAX_TOOLS = [
-  "tax_list_workflows", "tax_get_workflow_contract", "tax_plan_work",
+  "tax_list_workflows", "tax_get_workflow_contract", "tax_plan_work", "tax_get_automation_offer",
   "tax_list_rule_cards", "tax_search_law", "tax_check_business_status",
   "tax_list_practice_cards", "tax_list_holidays", "tax_get_schedule",
   "tax_find_office", "tax_search_interpretations", "tax_get_tribunal_decision",
@@ -26,8 +26,27 @@ async function connect(taxDomainClient) {
   return { server, client };
 }
 
-test("tool list has 15 read-only tax tools; structuredContent passes through unchanged", async () => {
-  const payload = { status: "weird", nested: { applicability: "applies", due: "2026-01-01" }, n: [1, 2] };
+test("tool list has 16 read-only tax tools; structuredContent passes through unchanged", async () => {
+  const automation_offer = {
+    schema_version: "automation-offer.v1",
+    label: "automation_offer_not_legal_content",
+    domain: "tax",
+    workflow_id: "withholding-payment",
+    availability: "available_on_request",
+    automates: [{
+      capability_id: "payroll-ledger-to-wh-payment-report",
+      label_ko: "급여대장으로 원천징수이행상황신고서 작성 초안",
+      input_document_types: ["ev-payroll-ledger", "ev-payment-proof"],
+      output_kinds: ["fill_draft_json", "working_paper_csv"],
+    }],
+    never_automated: ["government_submission", "final_tax_computation"],
+    human_review_required: true,
+    data_handling: { processing: "agentlink_private_backend", third_party_transfer: false },
+    contact: { channel: "not_configured", value: null },
+    pricing_ref: null,
+    config_source: "registry_default",
+  };
+  const payload = { automation_offer, status: "weird", nested: { applicability: "applies", due: "2026-01-01" }, n: [1, 2] };
   const calls = [];
   const fake = {
     async callTool(name, args) { calls.push([name, args]); return payload; },
@@ -35,6 +54,7 @@ test("tool list has 15 read-only tax tools; structuredContent passes through unc
   };
   const { client } = await connect(fake);
   const { tools } = await client.listTools();
+  assert.equal(tools.filter((t) => t.name.startsWith("tax_")).length, 16);
   for (const n of TAX_TOOLS) {
     const t = tools.find((x) => x.name === n);
     assert.ok(t, `missing ${n}`);
@@ -43,6 +63,7 @@ test("tool list has 15 read-only tax tools; structuredContent passes through unc
   assert.ok(tools.find((x) => x.name === "get_vat_data"), "legacy tool kept");
   const res = await client.callTool({ name: "tax_plan_work", arguments: { matter: { matter_id: "m", extra: 1 } } });
   assert.deepEqual(res.structuredContent, payload);
+  assert.deepEqual(res.structuredContent.automation_offer, automation_offer);
   assert.deepEqual(JSON.parse(res.content[0].text), payload);
   assert.deepEqual(calls[0], ["plan_tax_work", { matter: { matter_id: "m", extra: 1 } }]);
   await client.callTool({ name: "tax_search_law", arguments: { query: "원천징수" } });
@@ -65,6 +86,8 @@ test("new tax tools forward arguments, apply defaults and reject out-of-range in
   await call("tax_list_form_guides", {});
   await call("tax_get_form_field_tips", { form_id: "wh-payment-report", code: "A25" });
   await call("tax_plan_work", { matter: { matter_id: "m" }, include_evidence: false, include_filling_guide: false });
+  await call("tax_get_automation_offer", {});
+  await call("tax_get_automation_offer", { workflow_id: "withholding-payment" });
   assert.deepEqual(calls, [
     ["list_practice_cards", { workflow_id: "withholding-payment", topic_query: "지급명세서" }],
     ["list_holidays", { year: 2026 }],
@@ -77,9 +100,12 @@ test("new tax tools forward arguments, apply defaults and reject out-of-range in
     ["list_form_guides", {}],
     ["get_form_field_tips", { form_id: "wh-payment-report", code: "A25", limit: 20 }],
     ["plan_tax_work", { matter: { matter_id: "m" }, include_evidence: false, include_filling_guide: false }],
+    ["get_automation_offer", {}],
+    ["get_automation_offer", { workflow_id: "withholding-payment" }],
   ]);
   const { tools } = await client.listTools();
   const open = (n) => tools.find((t) => t.name === n).annotations.openWorldHint;
+  assert.equal(open("tax_get_automation_offer"), false);
   assert.equal(open("tax_list_practice_cards"), false);
   assert.equal(open("tax_list_holidays"), true);
   assert.equal(open("tax_search_forms"), true);
@@ -87,6 +113,7 @@ test("new tax tools forward arguments, apply defaults and reject out-of-range in
   assert.equal(open("tax_get_form_field_tips"), false);
   const n = calls.length;
   const bad = [
+    ["tax_get_automation_offer", { workflow_id: "x".repeat(81) }],
     ["tax_list_holidays", { year: 1800 }],
     ["tax_get_schedule", { year: 2026, month: 13 }],
     ["tax_get_schedule", { year: 2026, limit: 301 }],
@@ -164,10 +191,15 @@ test("concurrent first calls spawn one child", async () => {
 });
 
 test("env allowlist: non-allowlisted vars are not passed, allowlisted are", async () => {
-  const c = fake(null, {}, { PATH: process.env.PATH, FOO_SECRET: "x", HTTPS_PROXY: "http://p:1" });
+  const offerPath = "/tmp/automation-offer.json";
+  const c = fake(null, {}, {
+    PATH: process.env.PATH, FOO_SECRET: "x", HTTPS_PROXY: "http://p:1",
+    AGENTLINK_AUTOMATION_OFFER_PATH: offerPath,
+  });
   const r = await c.callTool("env_check", {});
   assert.equal(r.has_secret, false);
   assert.equal(r.has_proxy, true);
+  assert.equal(r.automation_offer_path, offerPath);
   await c.close();
 });
 

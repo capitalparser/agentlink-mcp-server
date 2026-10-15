@@ -45,6 +45,10 @@ export function registerTaxDomainTools(server: McpServer, client: TaxDomainClien
     "Get required facts, roles and status contract of a workflow (업무의 필요 사실·역할·상태 계약).",
     { workflow_id: z.string().describe("Workflow id (업무 ID)") });
 
+  reg("tax_get_automation_offer", "get_automation_offer",
+    "Get automation offers separately from legal content (법률 내용과 분리된 자동화 안내 조회).",
+    { workflow_id: z.string().max(80).optional() });
+
   reg("tax_plan_work", "plan_tax_work",
     "Plan tax work from a TaxMatter: questions, evidence, deadline candidates, unresolved items (TaxMatter로 업무 계획 초안 작성).",
     {
