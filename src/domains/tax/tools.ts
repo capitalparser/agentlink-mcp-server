@@ -57,6 +57,21 @@ export function registerTaxDomainTools(server: McpServer, client: TaxDomainClien
       include_filling_guide: z.boolean().optional().describe("Attach a draft filling guide mapping payments to form fields; not a tax computation (default true, 작성 안내 초안 첨부)"),
     });
 
+  reg("tax_answer_practitioner_question", "answer_practitioner_question",
+    "Answer a practitioner question using the common practitioner packet; the final decision is not issued.",
+    {
+      matter: z.object({}).passthrough().describe("TaxMatter object"),
+      question: z.string().max(500).nullable().optional(),
+      conversation_state: z.object({}).passthrough().nullable().optional(),
+    });
+
+  reg("tax_export_rule_cards", "export_rule_cards",
+    "Export common rule cards or the separate practice_signal registry.",
+    {
+      layer: z.enum(["rules", "practice"]).default("rules"),
+      workflow_id: z.string().max(80).nullable().optional(),
+    });
+
   reg("tax_list_rule_cards", "list_rule_cards",
     "List rule cards of a workflow with verification status (업무의 규칙 카드와 원문 대조 상태).",
     { workflow_id: z.string().describe("Workflow id (업무 ID)") });
