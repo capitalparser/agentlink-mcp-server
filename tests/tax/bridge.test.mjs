@@ -16,6 +16,7 @@ const TAX_TOOLS = [
   "tax_list_practice_cards", "tax_list_holidays", "tax_get_schedule",
   "tax_find_office", "tax_search_interpretations", "tax_get_tribunal_decision",
   "tax_search_forms", "tax_list_form_guides", "tax_get_form_field_tips",
+  "tax_answer_practitioner_question", "tax_export_rule_cards",
 ];
 
 async function connect(taxDomainClient) {
@@ -26,7 +27,7 @@ async function connect(taxDomainClient) {
   return { server, client };
 }
 
-test("tool list has 16 read-only tax tools; structuredContent passes through unchanged", async () => {
+test("tool list has 18 read-only tax tools; structuredContent passes through unchanged", async () => {
   const automation_offer = {
     schema_version: "automation-offer.v1",
     label: "automation_offer_not_legal_content",
@@ -54,7 +55,7 @@ test("tool list has 16 read-only tax tools; structuredContent passes through unc
   };
   const { client } = await connect(fake);
   const { tools } = await client.listTools();
-  assert.equal(tools.filter((t) => t.name.startsWith("tax_")).length, 16);
+  assert.equal(tools.filter((t) => t.name.startsWith("tax_")).length, 18);
   for (const n of TAX_TOOLS) {
     const t = tools.find((x) => x.name === n);
     assert.ok(t, `missing ${n}`);
@@ -68,6 +69,55 @@ test("tool list has 16 read-only tax tools; structuredContent passes through unc
   assert.deepEqual(calls[0], ["plan_tax_work", { matter: { matter_id: "m", extra: 1 } }]);
   await client.callTool({ name: "tax_search_law", arguments: { query: "원천징수" } });
   assert.deepEqual(calls[1], ["search_tax_law", { query: "원천징수", target: "law", limit: 10 }]);
+  for (const name of ["tax_answer_practitioner_question", "tax_export_rule_cards"]) {
+    const args = name === "tax_answer_practitioner_question" ? { matter: {} } : {};
+    const result = await client.callTool({ name, arguments: args });
+    assert.deepEqual(result.structuredContent, payload);
+    assert.deepEqual(JSON.parse(result.content[0].text), payload);
+    assert.equal(tools.find((t) => t.name === name).annotations.openWorldHint, false);
+  }
+});
+
+test("practitioner tools forward arguments and reject invalid ranges before domain calls", async () => {
+  const calls = [];
+  const fake = { async callTool(name, args) { calls.push([name, args]); return {}; }, async close() {} };
+  const { client } = await connect(fake);
+  const call = (name, args) => client.callTool({ name, arguments: args });
+  try {
+    const matter = { workflow_id: "withholding-payment", facts: { payments: [] } };
+    const state = { schema_version: "conversation-state.v1", turn: 1 };
+    await call("tax_answer_practitioner_question", { matter });
+    await call("tax_answer_practitioner_question", { matter, question: "q".repeat(500), conversation_state: state });
+    await call("tax_answer_practitioner_question", { matter, question: null, conversation_state: null });
+    await call("tax_export_rule_cards", {});
+    await call("tax_export_rule_cards", { layer: "practice", workflow_id: "withholding-payment" });
+    await call("tax_export_rule_cards", { layer: "rules", workflow_id: null });
+    assert.deepEqual(calls, [
+      ["answer_practitioner_question", { matter }],
+      ["answer_practitioner_question", { matter, question: "q".repeat(500), conversation_state: state }],
+      ["answer_practitioner_question", { matter, question: null, conversation_state: null }],
+      ["export_rule_cards", { layer: "rules" }],
+      ["export_rule_cards", { layer: "practice", workflow_id: "withholding-payment" }],
+      ["export_rule_cards", { layer: "rules", workflow_id: null }],
+    ]);
+    const n = calls.length;
+    for (const [name, args] of [
+      ["tax_answer_practitioner_question", {}],
+      ["tax_answer_practitioner_question", { matter: [] }],
+      ["tax_answer_practitioner_question", { matter: {}, question: "q".repeat(501) }],
+      ["tax_answer_practitioner_question", { matter: {}, question: 1 }],
+      ["tax_answer_practitioner_question", { matter: {}, conversation_state: [] }],
+      ["tax_export_rule_cards", { layer: "bogus" }],
+      ["tax_export_rule_cards", { workflow_id: "x".repeat(81) }],
+    ]) {
+      let rejected = false;
+      try { rejected = (await call(name, args)).isError === true; } catch { rejected = true; }
+      assert.ok(rejected, `${name} should reject invalid input`);
+    }
+    assert.equal(calls.length, n);
+  } finally {
+    await client.close();
+  }
 });
 
 test("new tax tools forward arguments, apply defaults and reject out-of-range input", async () => {
@@ -233,7 +283,7 @@ test("end-to-end against the real Python domain server", {
     ? "SKIPPED: set AGENTLINK_TAX_E2E_PYTHON (and AGENTLINK_TAX_E2E_PYTHONPATH if the domain package is not installed)"
     : false,
 }, async () => {
-  const tax = new TaxDomainClient({ command: PY, args: ["-m", "agentlink_tax.server"], pythonPath: SRC || undefined });
+  const tax = new TaxDomainClient({ command: PY, args: ["-B", "-m", "agentlink_tax.server"], pythonPath: SRC || undefined });
   const { client } = await connect(tax);
   try {
     const wf = await client.callTool({ name: "tax_list_workflows", arguments: {} });
@@ -262,7 +312,13 @@ test("end-to-end against the real Python domain server", {
       facts: { payments: [{ payment_id: "p1", income_type: "wage", payee_type: "resident",
         payment_date: "2026-03-25", gross_amount: 3000000, withheld_amount: "10000" }] },
     };
-    const plan = await client.callTool({ name: "tax_plan_work", arguments: { matter } });
+    const answer = await client.callTool({ name: "tax_answer_practitioner_question", arguments: { matter } });
+    assert.notEqual(answer.isError, true);
+    assert.equal(answer.structuredContent.schema_version, "practitioner-answer.v1");
+    assert.equal(answer.structuredContent.final_decision, "not_issued");
+    assert.deepEqual(answer.structuredContent, await tax.callTool("answer_practitioner_question", { matter }));
+
+    const plan = await client.callTool({ name: "tax_plan_work", arguments: { matter, include_evidence: false } });
     assert.equal(plan.structuredContent.status, "draft_ready");
     const due = plan.structuredContent.next_actions.filter((a) => a.due_date);
     assert.equal(due[0].due_date, "2026-04-10");
