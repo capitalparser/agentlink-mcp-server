@@ -13,6 +13,8 @@ import { TaxDomainClient } from "../../dist/domains/tax/bridge.js";
 const TAX_TOOLS = [
   "tax_list_workflows", "tax_get_workflow_contract", "tax_plan_work",
   "tax_list_rule_cards", "tax_search_law", "tax_check_business_status",
+  "tax_list_practice_cards", "tax_list_holidays", "tax_get_schedule",
+  "tax_find_office", "tax_search_interpretations", "tax_get_tribunal_decision",
 ];
 
 async function connect(taxDomainClient) {
@@ -23,7 +25,7 @@ async function connect(taxDomainClient) {
   return { server, client };
 }
 
-test("tool list has 6 read-only tax tools; structuredContent passes through unchanged", async () => {
+test("tool list has 12 read-only tax tools; structuredContent passes through unchanged", async () => {
   const payload = { status: "weird", nested: { applicability: "applies", due: "2026-01-01" }, n: [1, 2] };
   const calls = [];
   const fake = {
@@ -44,6 +46,49 @@ test("tool list has 6 read-only tax tools; structuredContent passes through unch
   assert.deepEqual(calls[0], ["plan_tax_work", { matter: { matter_id: "m", extra: 1 } }]);
   await client.callTool({ name: "tax_search_law", arguments: { query: "원천징수" } });
   assert.deepEqual(calls[1], ["search_tax_law", { query: "원천징수", target: "law", limit: 10 }]);
+});
+
+test("new tax tools forward arguments, apply defaults and reject out-of-range input", async () => {
+  const calls = [];
+  const fake = { async callTool(name, args) { calls.push([name, args]); return { status: "ok" }; }, async close() {} };
+  const { client } = await connect(fake);
+  const call = (name, args) => client.callTool({ name, arguments: args });
+  await call("tax_list_practice_cards", { workflow_id: "withholding-payment", topic_query: "지급명세서" });
+  await call("tax_list_holidays", { year: 2026 });
+  await call("tax_get_schedule", { year: 2026, query: "부가", month: 7 });
+  await call("tax_find_office", { query: "역삼동" });
+  await call("tax_search_interpretations", { query: "원천징수" });
+  await call("tax_search_interpretations", { query: "x", source: "tribunal_decision", limit: 3 });
+  await call("tax_get_tribunal_decision", { id: "123456" });
+  assert.deepEqual(calls, [
+    ["list_practice_cards", { workflow_id: "withholding-payment", topic_query: "지급명세서" }],
+    ["list_holidays", { year: 2026 }],
+    ["get_tax_schedule", { year: 2026, query: "부가", month: 7, limit: 100 }],
+    ["find_tax_office", { query: "역삼동" }],
+    ["search_tax_interpretations", { query: "원천징수", source: "nts_interpretation", limit: 10 }],
+    ["search_tax_interpretations", { query: "x", source: "tribunal_decision", limit: 3 }],
+    ["get_tribunal_decision", { id: "123456" }],
+  ]);
+  const { tools } = await client.listTools();
+  const open = (n) => tools.find((t) => t.name === n).annotations.openWorldHint;
+  assert.equal(open("tax_list_practice_cards"), false);
+  assert.equal(open("tax_list_holidays"), true);
+  const n = calls.length;
+  const bad = [
+    ["tax_list_holidays", { year: 1800 }],
+    ["tax_get_schedule", { year: 2026, month: 13 }],
+    ["tax_get_schedule", { year: 2026, limit: 301 }],
+    ["tax_search_interpretations", { query: "x", source: "bogus" }],
+    ["tax_search_interpretations", { query: "x", limit: 21 }],
+    ["tax_get_tribunal_decision", { id: "1234567890123" }],
+    ["tax_find_office", { query: "" }],
+  ];
+  for (const [name, args] of bad) {
+    let rejected = false;
+    try { const r = await call(name, args); rejected = r.isError === true; } catch { rejected = true; }
+    assert.ok(rejected, `${name} should reject ${JSON.stringify(args)}`);
+  }
+  assert.equal(calls.length, n, "invalid input must not reach the domain");
 });
 
 test("error mapping never leaks stderr or paths", async () => {
@@ -143,6 +188,13 @@ test("end-to-end against the real Python domain server", {
     const wf = await client.callTool({ name: "tax_list_workflows", arguments: {} });
     assert.equal(wf.structuredContent.domain, "tax");
     assert.equal(wf.structuredContent.workflows.length, 9);
+
+    const pc = await client.callTool({ name: "tax_list_practice_cards", arguments: { workflow_id: "withholding-payment" } });
+    assert.notEqual(pc.isError, true);
+    assert.equal(pc.structuredContent.workflow_id, "withholding-payment");
+    assert.equal(pc.structuredContent.authority, "practice");
+    assert.equal(pc.structuredContent.verification_status, "practice_signal_unverified");
+    assert.ok(Array.isArray(pc.structuredContent.cards));
 
     const matter = {
       matter_id: "m1", workflow_id: "withholding-payment", as_of: "2026-04-01",
