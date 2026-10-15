@@ -15,6 +15,7 @@ const TAX_TOOLS = [
   "tax_list_rule_cards", "tax_search_law", "tax_check_business_status",
   "tax_list_practice_cards", "tax_list_holidays", "tax_get_schedule",
   "tax_find_office", "tax_search_interpretations", "tax_get_tribunal_decision",
+  "tax_search_forms", "tax_list_form_guides", "tax_get_form_field_tips",
 ];
 
 async function connect(taxDomainClient) {
@@ -25,7 +26,7 @@ async function connect(taxDomainClient) {
   return { server, client };
 }
 
-test("tool list has 12 read-only tax tools; structuredContent passes through unchanged", async () => {
+test("tool list has 15 read-only tax tools; structuredContent passes through unchanged", async () => {
   const payload = { status: "weird", nested: { applicability: "applies", due: "2026-01-01" }, n: [1, 2] };
   const calls = [];
   const fake = {
@@ -60,6 +61,10 @@ test("new tax tools forward arguments, apply defaults and reject out-of-range in
   await call("tax_search_interpretations", { query: "원천징수" });
   await call("tax_search_interpretations", { query: "x", source: "tribunal_decision", limit: 3 });
   await call("tax_get_tribunal_decision", { id: "123456" });
+  await call("tax_search_forms", { query: "원천징수이행상황신고서", law_name: "소득세법 시행규칙" });
+  await call("tax_list_form_guides", {});
+  await call("tax_get_form_field_tips", { form_id: "wh-payment-report", code: "A25" });
+  await call("tax_plan_work", { matter: { matter_id: "m" }, include_evidence: false, include_filling_guide: false });
   assert.deepEqual(calls, [
     ["list_practice_cards", { workflow_id: "withholding-payment", topic_query: "지급명세서" }],
     ["list_holidays", { year: 2026 }],
@@ -68,11 +73,18 @@ test("new tax tools forward arguments, apply defaults and reject out-of-range in
     ["search_tax_interpretations", { query: "원천징수", source: "nts_interpretation", limit: 10 }],
     ["search_tax_interpretations", { query: "x", source: "tribunal_decision", limit: 3 }],
     ["get_tribunal_decision", { id: "123456" }],
+    ["search_tax_forms", { query: "원천징수이행상황신고서", law_name: "소득세법 시행규칙", limit: 10 }],
+    ["list_form_guides", {}],
+    ["get_form_field_tips", { form_id: "wh-payment-report", code: "A25", limit: 20 }],
+    ["plan_tax_work", { matter: { matter_id: "m" }, include_evidence: false, include_filling_guide: false }],
   ]);
   const { tools } = await client.listTools();
   const open = (n) => tools.find((t) => t.name === n).annotations.openWorldHint;
   assert.equal(open("tax_list_practice_cards"), false);
   assert.equal(open("tax_list_holidays"), true);
+  assert.equal(open("tax_search_forms"), true);
+  assert.equal(open("tax_list_form_guides"), false);
+  assert.equal(open("tax_get_form_field_tips"), false);
   const n = calls.length;
   const bad = [
     ["tax_list_holidays", { year: 1800 }],
@@ -82,6 +94,13 @@ test("new tax tools forward arguments, apply defaults and reject out-of-range in
     ["tax_search_interpretations", { query: "x", limit: 21 }],
     ["tax_get_tribunal_decision", { id: "1234567890123" }],
     ["tax_find_office", { query: "" }],
+    ["tax_search_forms", { query: "x", limit: 21 }],
+    ["tax_search_forms", { query: "x".repeat(101) }],
+    ["tax_list_form_guides", { form_id: "x".repeat(61) }],
+    ["tax_get_form_field_tips", { form_id: "" }],
+    ["tax_get_form_field_tips", { form_id: "a", limit: 51 }],
+    ["tax_get_form_field_tips", { form_id: "a", code: "x".repeat(81) }],
+    ["tax_plan_work", { matter: {}, include_evidence: "yes" }],
   ];
   for (const [name, args] of bad) {
     let rejected = false;
@@ -195,6 +214,15 @@ test("end-to-end against the real Python domain server", {
     assert.equal(pc.structuredContent.authority, "practice");
     assert.equal(pc.structuredContent.verification_status, "practice_signal_unverified");
     assert.ok(Array.isArray(pc.structuredContent.cards));
+
+    const tips = await client.callTool({ name: "tax_get_form_field_tips", arguments: { form_id: "wh-payment-report", code: "A25" } });
+    assert.notEqual(tips.isError, true);
+    assert.ok(tips.structuredContent && typeof tips.structuredContent === "object");
+    assert.ok(JSON.stringify(tips.structuredContent).includes("A25"));
+    const guides = await client.callTool({ name: "tax_list_form_guides", arguments: {} });
+    assert.notEqual(guides.isError, true);
+    assert.equal(guides.structuredContent.status, "ok");
+    assert.ok(Array.isArray(guides.structuredContent.guides));
 
     const matter = {
       matter_id: "m1", workflow_id: "withholding-payment", as_of: "2026-04-01",

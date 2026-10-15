@@ -47,7 +47,11 @@ export function registerTaxDomainTools(server: McpServer, client: TaxDomainClien
 
   reg("tax_plan_work", "plan_tax_work",
     "Plan tax work from a TaxMatter: questions, evidence, deadline candidates, unresolved items (TaxMatter로 업무 계획 초안 작성).",
-    { matter: z.object({}).passthrough().describe("TaxMatter object (matter_id, workflow_id, as_of, taxpayer, facts)") });
+    {
+      matter: z.object({}).passthrough().describe("TaxMatter object (matter_id, workflow_id, as_of, taxpayer, facts)"),
+      include_evidence: z.boolean().optional().describe("Attach official form links and evidence candidates from law.go.kr; failures are non-blocking warnings (default true, 서식 원본·근거 후보 첨부)"),
+      include_filling_guide: z.boolean().optional().describe("Attach a draft filling guide mapping payments to form fields; not a tax computation (default true, 작성 안내 초안 첨부)"),
+    });
 
   reg("tax_list_rule_cards", "list_rule_cards",
     "List rule cards of a workflow with verification status (업무의 규칙 카드와 원문 대조 상태).",
@@ -103,4 +107,25 @@ export function registerTaxDomainTools(server: McpServer, client: TaxDomainClien
   reg("tax_get_tribunal_decision", "get_tribunal_decision",
     "Get a tax tribunal decision detail by id from tax_search_interpretations source=tribunal_decision (조세심판원 재결례 상세).",
     { id: z.string().regex(/^\d{1,12}$/).describe("Decision id (재결례 일련번호)") }, true);
+
+  reg("tax_search_forms", "search_tax_forms",
+    "Search law.go.kr appendices/forms (licbyl) for official form source HWP/PDF links; not filling guidance (법령정보센터 별표·서식 검색, 서식 원본 링크).",
+    {
+      query: z.string().min(1).max(100).describe("Form name query (별표·서식명 검색어)"),
+      law_name: z.string().optional().describe("Exact related law name filter, e.g. 소득세법 시행규칙 (관련법령명 정확 일치)"),
+      limit: z.number().int().min(1).max(20).default(10).describe("Max results (1-20)"),
+    }, true);
+
+  reg("tax_list_form_guides", "list_form_guides",
+    "List form filling guides and examples from the registry; links only, content unverified, not legal basis (서식 작성요령·예시 자료 목록).",
+    { form_id: z.string().max(60).optional().describe("Form id; omit for all (서식 ID, 생략 시 전체)") });
+
+  reg("tax_get_form_field_tips", "get_form_field_tips",
+    "Get per-field tips of a form in three labeled layers: official instruction, practice signal, guide; do not mix layers (서식 칸별 작성 tips 3계층).",
+    {
+      form_id: z.string().min(1).max(60).describe("Form id (서식 ID)"),
+      code: z.string().max(80).optional().describe("Field key, code (A25) or circled number (칸 key·코드·원문자)"),
+      query: z.string().max(100).optional().describe("Substring of label/instruction (라벨·작성방법 필터)"),
+      limit: z.number().int().min(1).max(50).default(20).describe("Max tips (1-50)"),
+    });
 }
