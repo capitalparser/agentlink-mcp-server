@@ -95,11 +95,13 @@ npm run dev
 | `AGENTLINK_TAX_MCP_ARGS` | 인자 (JSON 배열) | `["-m","agentlink_tax.server"]` |
 | `AGENTLINK_TAX_MCP_PYTHONPATH` | 자식 프로세스 `PYTHONPATH` (선택) | - |
 
-자식 프로세스에는 `PATH, HOME, LANG, LC_ALL, TZ, TMPDIR, PYTHONPATH, AGENTLINK_CREDENTIALS_PATH, AGENTLINK_TAX_REGISTRY, HTTPS_PROXY, HTTP_PROXY, NO_PROXY`(소문자 변형 포함), `SSL_CERT_FILE, REQUESTS_CA_BUNDLE`만 전달됩니다.
+자식 프로세스에는 `PATH, HOME, LANG, LC_ALL, TZ, TMPDIR, PYTHONPATH, AGENTLINK_CREDENTIALS_PATH, AGENTLINK_TAX_REGISTRY, AGENTLINK_AUTOMATION_OFFER_PATH, HTTPS_PROXY, HTTP_PROXY, NO_PROXY`(소문자 변형 포함), `SSL_CERT_FILE, REQUESTS_CA_BUNDLE`만 전달됩니다.
 
 도메인 레지스트리를 찾을 수 있어야 합니다: 도메인 패키지를 editable 설치하거나, `AGENTLINK_TAX_REGISTRY`를 지정하거나, `AGENTLINK_TAX_MCP_PYTHONPATH`(또는 `PYTHONPATH`)를 소스 트리로 지정하세요.
 
-도구 (모두 읽기 전용): `tax_list_workflows`, `tax_get_workflow_contract`, `tax_plan_work`, `tax_list_rule_cards`, `tax_search_law`, `tax_check_business_status`, `tax_list_practice_cards`, `tax_list_holidays`, `tax_get_schedule`, `tax_find_office`, `tax_search_interpretations`, `tax_get_tribunal_decision`, `tax_search_forms`, `tax_list_form_guides`, `tax_get_form_field_tips`. `tax_plan_work`는 선택 인자 `include_evidence`(서식 원본·근거 후보 첨부)와 `include_filling_guide`(작성 안내 초안 첨부)를 받습니다. 성공 결과는 도메인 서버의 `structuredContent`를 그대로 반환하며(오류 결과의 원문은 전달하지 않고 고정된 안전한 메시지의 `TAX_DOMAIN_TOOL_ERROR`로 대체), 초안일 뿐 적용 여부는 판단되지 않고 세액은 계산하지 않습니다. 호출 제한시간은 30초이며, 실패 시 `tax-bridge-error.v1` (`TAX_DOMAIN_UNAVAILABLE` / `TAX_DOMAIN_TIMEOUT` / `TAX_DOMAIN_TOOL_ERROR` / `TAX_DOMAIN_ERROR`)을 반환합니다.
+도구 (모두 읽기 전용): `tax_list_workflows`, `tax_get_workflow_contract`, `tax_plan_work`, `tax_get_automation_offer`, `tax_list_rule_cards`, `tax_search_law`, `tax_check_business_status`, `tax_list_practice_cards`, `tax_list_holidays`, `tax_get_schedule`, `tax_find_office`, `tax_search_interpretations`, `tax_get_tribunal_decision`, `tax_search_forms`, `tax_list_form_guides`, `tax_get_form_field_tips`. `tax_plan_work`는 선택 인자 `include_evidence`(서식 원본·근거 후보 첨부)와 `include_filling_guide`(작성 안내 초안 첨부)를 받습니다. 성공 결과는 도메인 서버의 `structuredContent`를 그대로 반환하며(오류 결과의 원문은 전달하지 않고 고정된 안전한 메시지의 `TAX_DOMAIN_TOOL_ERROR`로 대체), 초안일 뿐 적용 여부는 판단되지 않고 세액은 계산하지 않습니다. 호출 제한시간은 30초이며, 실패 시 `tax-bridge-error.v1` (`TAX_DOMAIN_UNAVAILABLE` / `TAX_DOMAIN_TIMEOUT` / `TAX_DOMAIN_TOOL_ERROR` / `TAX_DOMAIN_ERROR`)을 반환합니다.
+
+`automation_offer`는 법률 내용이 아닌 별도 섹션이며, 연락 채널은 `not_configured`일 수 있습니다.
 
 상태: 로컬 stdio 브리지 (원격/호스팅 미지원).
 
