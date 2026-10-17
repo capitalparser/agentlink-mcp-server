@@ -18,11 +18,17 @@ import { TaxDomainClient } from "./domains/tax/bridge.js";
 import type { TaxDomainClientLike } from "./domains/tax/bridge.js";
 import { registerTaxDomainTools } from "./domains/tax/tools.js";
 
+import { SubsidyDomainClient } from "./domains/subsidy/bridge.js";
+import type { SubsidyDomainClientLike } from "./domains/subsidy/bridge.js";
+import { registerSubsidyDomainTools } from "./domains/subsidy/tools.js";
+
 export interface CreateServerOptions {
   /** Custom data provider (defaults to StubDataProvider for development) */
   provider?: DataProvider;
   /** Tax domain MCP client (defaults to a lazy stdio client configured from env) */
   taxDomainClient?: TaxDomainClientLike;
+  /** Subsidy/R&D domain client (lazy local stdio by default). */
+  subsidyDomainClient?: SubsidyDomainClientLike;
 }
 
 /**
@@ -50,6 +56,14 @@ export function createServer(options: CreateServerOptions = {}): McpServer {
   server.server.onclose = () => {
     void taxClient.close();
     prevOnClose?.();
+  };
+
+  const subsidyClient = options.subsidyDomainClient ?? new SubsidyDomainClient();
+  registerSubsidyDomainTools(server, subsidyClient);
+  const prevSubsidyOnClose = server.server.onclose;
+  server.server.onclose = () => {
+    void subsidyClient.close();
+    prevSubsidyOnClose?.();
   };
 
   return server;
