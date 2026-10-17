@@ -36,6 +36,8 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that p
 |------|-------------|
 | `get_disaster_alerts` | Retrieve disaster alerts from MOIS (행정안전부 재난 알림 조회) |
 
+보조금·R&D 실무자 도구 7개도 읽기 전용 로컬 브리지로 제공합니다: `subsidy_list_workflows`, `subsidy_get_reference_bundle`, `subsidy_search_references`, `subsidy_get_reference`, `subsidy_answer_practitioner_question`, `subsidy_list_practitioner_topics`, `subsidy_get_official_text`. 결과는 검토용 초안이며 적용 여부는 판단되지 않습니다. 공식 원문은 국가법령정보센터 로컬 사본이며 개정 여부는 `public_url`에서 확인하세요. 설치·환경 변수·사용 신호·한계는 [보조금 도메인 브리지 문서](docs/SUBSIDY_DOMAIN_BRIDGE.md)를 참고하세요. Work 도구는 범위 밖입니다.
+
 ## Quick Start
 
 ### Installation
