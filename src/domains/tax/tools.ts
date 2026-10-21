@@ -64,7 +64,7 @@ export function registerTaxDomainTools(server: McpServer, client: TaxDomainClien
       matter: z.object({}).passthrough().describe("TaxMatter object (matter_id, workflow_id, as_of, taxpayer, facts)"),
       include_evidence: z.boolean().optional().describe("Attach official form links and evidence candidates from law.go.kr; failures are non-blocking warnings (default true, 서식 원본·근거 후보 첨부)"),
       include_filling_guide: z.boolean().optional().describe("Attach a draft filling guide mapping payments to form fields; not a tax computation (default true, 작성 안내 초안 첨부)"),
-    });
+    }, true);
 
   reg("tax_answer_practitioner_question", "answer_practitioner_question",
     "Answer a practitioner question using the common practitioner packet; the final decision is not issued.",
@@ -72,7 +72,8 @@ export function registerTaxDomainTools(server: McpServer, client: TaxDomainClien
       matter: z.object({}).passthrough().describe("TaxMatter object"),
       question: z.string().max(500).nullable().optional(),
       conversation_state: z.object({}).passthrough().nullable().optional(),
-    });
+      include_evidence: z.boolean().optional().describe("Opt in to current law text and unreviewed interpretation evidence (default false, 현재 법령 본문·미검토 해석 후보 조회)"),
+    }, true);
 
   reg("tax_export_rule_cards", "export_rule_cards",
     "Export common rule cards or the separate practice_signal registry.",
@@ -91,6 +92,14 @@ export function registerTaxDomainTools(server: McpServer, client: TaxDomainClien
       query: z.string().min(1).max(200).describe("Search query (검색어)"),
       target: z.enum(["law", "admrul", "expc"]).default("law").describe("law | admrul | expc"),
       limit: z.number().int().min(1).max(20).default(10).describe("Max results (1-20)"),
+    }, true);
+
+  reg("tax_get_law_article", "get_law_article",
+    "Fetch current official text for one statute article; this does not establish historical wording, applicability, or completed text verification (법령 조문 본문 조회, 과거 문구·적용 여부·원문 대조 완료를 확정하지 않음).",
+    {
+      law_name: z.string().min(1).max(100).describe("Law name (법령명)"),
+      article: z.string().min(1).max(20).describe("Article locator (조문 위치)"),
+      law_id: z.string().max(10).nullable().optional().describe("Optional law ID from tax_search_law (법령 ID)"),
     }, true);
 
   reg("tax_check_business_status", "check_business_status",

@@ -7,13 +7,15 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createServer } from "../../dist/server.js";
 import { TaxDomainClient } from "../../dist/domains/tax/bridge.js";
+import { registerTaxDomainTools } from "../../dist/domains/tax/tools.js";
 import { memoryDomainClient, genericContracts } from "./fixtures/memory-domain-client.mjs";
 
 const TAX_TOOLS = [
   "tax_list_workflows", "tax_get_workflow_contract", "tax_plan_work", "tax_get_automation_offer",
-  "tax_list_rule_cards", "tax_search_law", "tax_check_business_status",
+  "tax_list_rule_cards", "tax_search_law", "tax_get_law_article", "tax_check_business_status",
   "tax_list_practice_cards", "tax_list_holidays", "tax_get_schedule",
   "tax_find_office", "tax_search_interpretations", "tax_get_tribunal_decision",
   "tax_search_forms", "tax_list_form_guides", "tax_get_form_field_tips",
@@ -28,7 +30,7 @@ async function connect(taxDomainClient) {
   return { server, client };
 }
 
-test("tool list has 18 read-only tax tools; structuredContent passes through unchanged", async () => {
+test("tool list has 19 read-only tax tools; structuredContent passes through unchanged", async () => {
   const automation_offer = {
     schema_version: "automation-offer.v1",
     label: "automation_offer_not_legal_content",
@@ -56,7 +58,7 @@ test("tool list has 18 read-only tax tools; structuredContent passes through unc
   };
   const { client } = await connect(fake);
   const { tools } = await client.listTools();
-  assert.equal(tools.filter((t) => t.name.startsWith("tax_")).length, 18);
+  assert.equal(tools.filter((t) => t.name.startsWith("tax_")).length, 19);
   for (const n of TAX_TOOLS) {
     const t = tools.find((x) => x.name === n);
     assert.ok(t, `missing ${n}`);
@@ -71,13 +73,17 @@ test("tool list has 18 read-only tax tools; structuredContent passes through unc
   assert.deepEqual(calls[0], ["plan_tax_work", { matter: { matter_id: "m", extra: 1 } }]);
   await client.callTool({ name: "tax_search_law", arguments: { query: "원천징수" } });
   assert.deepEqual(calls[1], ["search_tax_law", { query: "원천징수", target: "law", limit: 10 }]);
+  await client.callTool({ name: "tax_get_law_article", arguments: { law_name: "소득세법", article: "제128조", law_id: "001565" } });
+  assert.deepEqual(calls[2], ["get_law_article", { law_name: "소득세법", article: "제128조", law_id: "001565" }]);
   for (const name of ["tax_answer_practitioner_question", "tax_export_rule_cards"]) {
     const args = name === "tax_answer_practitioner_question" ? { matter: {} } : {};
     const result = await client.callTool({ name, arguments: args });
     assert.deepEqual(result.structuredContent, payload);
     assert.deepEqual(JSON.parse(result.content[0].text), payload);
-    assert.equal(tools.find((t) => t.name === name).annotations.openWorldHint, false);
+    assert.equal(tools.find((t) => t.name === name).annotations.openWorldHint,
+      name === "tax_answer_practitioner_question");
   }
+  assert.equal(tools.find((t) => t.name === "tax_plan_work").annotations.openWorldHint, true);
 });
 
 test("practitioner tools forward arguments and reject invalid ranges before domain calls", async () => {
@@ -91,6 +97,8 @@ test("practitioner tools forward arguments and reject invalid ranges before doma
     await call("tax_answer_practitioner_question", { matter });
     await call("tax_answer_practitioner_question", { matter, question: "q".repeat(500), conversation_state: state });
     await call("tax_answer_practitioner_question", { matter, question: null, conversation_state: null });
+    await call("tax_answer_practitioner_question", { matter, include_evidence: false });
+    await call("tax_answer_practitioner_question", { matter, include_evidence: true });
     await call("tax_export_rule_cards", {});
     await call("tax_export_rule_cards", { layer: "practice", workflow_id: "withholding-payment" });
     await call("tax_export_rule_cards", { layer: "rules", workflow_id: null });
@@ -98,6 +106,8 @@ test("practitioner tools forward arguments and reject invalid ranges before doma
       ["answer_practitioner_question", { matter }],
       ["answer_practitioner_question", { matter, question: "q".repeat(500), conversation_state: state }],
       ["answer_practitioner_question", { matter, question: null, conversation_state: null }],
+      ["answer_practitioner_question", { matter, include_evidence: false }],
+      ["answer_practitioner_question", { matter, include_evidence: true }],
       ["export_rule_cards", { layer: "rules" }],
       ["export_rule_cards", { layer: "practice", workflow_id: "withholding-payment" }],
       ["export_rule_cards", { layer: "rules", workflow_id: null }],
@@ -109,6 +119,7 @@ test("practitioner tools forward arguments and reject invalid ranges before doma
       ["tax_answer_practitioner_question", { matter: {}, question: "q".repeat(501) }],
       ["tax_answer_practitioner_question", { matter: {}, question: 1 }],
       ["tax_answer_practitioner_question", { matter: {}, conversation_state: [] }],
+      ["tax_answer_practitioner_question", { matter: {}, include_evidence: "yes" }],
       ["tax_export_rule_cards", { layer: "bogus" }],
       ["tax_export_rule_cards", { workflow_id: "x".repeat(81) }],
     ]) {
@@ -134,6 +145,7 @@ test("new tax tools forward arguments, apply defaults and reject out-of-range in
   await call("tax_search_interpretations", { query: "원천징수" });
   await call("tax_search_interpretations", { query: "x", source: "tribunal_decision", limit: 3 });
   await call("tax_get_tribunal_decision", { id: "123456" });
+  await call("tax_get_law_article", { law_name: "소득세법", article: "제128조", law_id: "001565" });
   await call("tax_search_forms", { query: "원천징수이행상황신고서", law_name: "소득세법 시행규칙" });
   await call("tax_list_form_guides", {});
   await call("tax_get_form_field_tips", { form_id: "wh-payment-report", code: "A25" });
@@ -148,6 +160,7 @@ test("new tax tools forward arguments, apply defaults and reject out-of-range in
     ["search_tax_interpretations", { query: "원천징수", source: "nts_interpretation", limit: 10 }],
     ["search_tax_interpretations", { query: "x", source: "tribunal_decision", limit: 3 }],
     ["get_tribunal_decision", { id: "123456" }],
+    ["get_law_article", { law_name: "소득세법", article: "제128조", law_id: "001565" }],
     ["search_tax_forms", { query: "원천징수이행상황신고서", law_name: "소득세법 시행규칙", limit: 10 }],
     ["list_form_guides", {}],
     ["get_form_field_tips", { form_id: "wh-payment-report", code: "A25", limit: 20 }],
@@ -163,6 +176,9 @@ test("new tax tools forward arguments, apply defaults and reject out-of-range in
   assert.equal(open("tax_search_forms"), true);
   assert.equal(open("tax_list_form_guides"), false);
   assert.equal(open("tax_get_form_field_tips"), false);
+  assert.equal(open("tax_plan_work"), true);
+  assert.equal(open("tax_answer_practitioner_question"), true);
+  assert.equal(open("tax_get_law_article"), true);
   const n = calls.length;
   const bad = [
     ["tax_get_automation_offer", { workflow_id: "x".repeat(81) }],
@@ -179,6 +195,9 @@ test("new tax tools forward arguments, apply defaults and reject out-of-range in
     ["tax_get_form_field_tips", { form_id: "" }],
     ["tax_get_form_field_tips", { form_id: "a", limit: 51 }],
     ["tax_get_form_field_tips", { form_id: "a", code: "x".repeat(81) }],
+    ["tax_get_law_article", { law_name: "x".repeat(101), article: "제1조" }],
+    ["tax_get_law_article", { law_name: "소득세법", article: "x".repeat(21) }],
+    ["tax_get_law_article", { law_name: "소득세법", article: "제1조", law_id: "x".repeat(11) }],
     ["tax_plan_work", { matter: {}, include_evidence: "yes" }],
   ];
   for (const [name, args] of bad) {
@@ -217,6 +236,58 @@ test("error mapping never leaks stderr or paths", async () => {
   assert.ok(["TAX_DOMAIN_TIMEOUT", "TAX_DOMAIN_UNAVAILABLE"].includes(r3.error_code));
   assert.equal(r3.schema_version, "tax-bridge-error.v1");
   await Promise.all([missing.close(), crash.close(), hang.close()]);
+});
+
+test("safe law error packet passes through and authenticated MCP error is redacted", async () => {
+  const safePacket = { status: "error", code: "http_500" };
+  const forwarded = [];
+  const { server, client } = await connect({
+    async callTool(name, args) { forwarded.push([name, args]); return safePacket; },
+    async close() {},
+  });
+  try {
+    const pass = await client.callTool({ name: "tax_get_law_article", arguments: {
+      law_name: "소득세법", article: "제128조", law_id: "001565",
+    } });
+    assert.deepEqual(pass.structuredContent, safePacket);
+    assert.deepEqual(JSON.parse(pass.content[0].text), safePacket);
+    assert.deepEqual(forwarded, [["get_law_article", { law_name: "소득세법", article: "제128조", law_id: "001565" }]]);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+
+  const schemaSource = new McpServer({ name: "tax-contract-source", version: "0" });
+  const contracts = registerTaxDomainTools(schemaSource, {
+    setStatusListener() {},
+    async callToolResult() { return { content: [{ type: "text", text: "{}" }], structuredContent: {} }; },
+  }).contracts;
+  const articleContract = contracts.find((item) => item.domainName === "get_law_article");
+  assert.ok(articleContract);
+  const sentinel = "https://www.law.go.kr/DRF/lawService.do?OC=SYNTHETIC-LEAK-SENTINEL";
+  const childScript = `
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+const server = new McpServer({ name: "sentinel-tax-error", version: "0" });
+server.tool("get_law_article", "", {
+  law_name: z.string().min(1).max(100), article: z.string().min(1).max(20),
+  law_id: z.string().max(10).nullable().optional(),
+}, async () => ({ isError: true, content: [{ type: "text", text: ${JSON.stringify(sentinel)} }] }));
+await server.connect(new StdioServerTransport());
+`;
+  const bridge = new TaxDomainClient({ command: process.execPath, args: ["--input-type=module", "-e", childScript] });
+  try {
+    const status = await bridge.initialize([articleContract]);
+    assert.equal(status.state, "ready");
+    const result = await bridge.callTool("get_law_article", { law_name: "소득세법", article: "제128조" });
+    assert.equal(result.error_code, "TAX_DOMAIN_TOOL_ERROR");
+    assert.equal(result.message, "Tax domain tool reported an error.");
+    assert.ok(!JSON.stringify(result).includes("SYNTHETIC-LEAK-SENTINEL"));
+    assert.ok(!JSON.stringify(result).includes("OC="));
+  } finally {
+    await bridge.close();
+  }
 });
 
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-child.mjs");

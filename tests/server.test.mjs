@@ -51,11 +51,11 @@ test('an unavailable optional subsidy domain does not hide verified tax tools', 
   const { server, client } = await openServer({ taxDomainClient: tax, subsidyDomainClient: invalidSubsidy() });
   try {
     const { tools } = await client.listTools();
-    assert.equal(tools.filter((tool) => tool.name.startsWith('tax_')).length, 18);
+    assert.equal(tools.filter((tool) => tool.name.startsWith('tax_')).length, 19);
     assert.equal(tools.some((tool) => tool.name.startsWith('subsidy_')), false);
     const status = (await client.callTool({ name: 'agentlink_bridge_status', arguments: {} })).structuredContent;
     assert.equal(status.tax.state, 'ready');
-    assert.equal(status.tax.verified_tool_count, 18);
+    assert.equal(status.tax.verified_tool_count, 19);
     assert.equal(status.subsidy.state, 'invalid');
   } finally {
     await client.close();

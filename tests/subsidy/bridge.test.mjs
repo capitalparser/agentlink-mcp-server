@@ -20,7 +20,7 @@ const BASELINE = [
   'get_business_info', 'get_disaster_alerts', 'get_income_tax_summary', 'get_procurement_data', 'get_tax_invoice',
   'get_vat_data', 'search_court_precedents', 'search_public_notices', 'tax_answer_practitioner_question',
   'tax_check_business_status', 'tax_export_rule_cards', 'tax_find_office', 'tax_get_automation_offer',
-  'tax_get_form_field_tips', 'tax_get_schedule', 'tax_get_tribunal_decision', 'tax_get_workflow_contract',
+  'tax_get_form_field_tips', 'tax_get_law_article', 'tax_get_schedule', 'tax_get_tribunal_decision', 'tax_get_workflow_contract',
   'tax_list_form_guides', 'tax_list_holidays', 'tax_list_practice_cards', 'tax_list_rule_cards', 'tax_list_workflows',
   'tax_plan_work', 'tax_search_forms', 'tax_search_interpretations', 'tax_search_law', 'verify_business_registration',
 ];
@@ -52,13 +52,13 @@ const rejected = async (client, name, args) => {
   assert.ok(failed, `${name} must reject invalid arguments`);
 };
 
-test('T1: exact 27 legacy + 7 subsidy tools, notices, annotations and stdio structured passthrough', async t => {
+test('T1: exact tax and subsidy tools, notices, annotations and stdio structured passthrough', async t => {
   const log = spawnLog();
   const subsidy = await fake({ args: [FAKE, log] });
   const client = await connect(t, subsidy);
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map(x => x.name).sort(), [...BASELINE, ...SUBSIDY.map(x => `subsidy_${x}`)].sort());
-  assert.equal(tools.filter(x => x.name.startsWith('tax_')).length, 18);
+  assert.equal(tools.filter(x => x.name.startsWith('tax_')).length, 19);
   for (const name of SUBSIDY) {
     const tool = tools.find(x => x.name === `subsidy_${name}`);
     assert.deepEqual(tool.annotations, { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false });
