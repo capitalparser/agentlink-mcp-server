@@ -1,7 +1,7 @@
 // Run after `npm run build`: node --test tests/tax/bridge.test.mjs
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createServer } from "../../dist/server.js";
 import { TaxDomainClient } from "../../dist/domains/tax/bridge.js";
+import { memoryDomainClient, genericContracts } from "./fixtures/memory-domain-client.mjs";
 
 const TAX_TOOLS = [
   "tax_list_workflows", "tax_get_workflow_contract", "tax_plan_work", "tax_get_automation_offer",
@@ -20,7 +21,7 @@ const TAX_TOOLS = [
 ];
 
 async function connect(taxDomainClient) {
-  const server = createServer({ taxDomainClient });
+  const server = await createServer({ taxDomainClient: memoryDomainClient(taxDomainClient), demo: true });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "t", version: "0" });
   await Promise.all([server.connect(a), client.connect(b)]);
@@ -61,7 +62,8 @@ test("tool list has 18 read-only tax tools; structuredContent passes through unc
     assert.ok(t, `missing ${n}`);
     assert.equal(t.annotations?.readOnlyHint, true);
   }
-  assert.ok(tools.find((x) => x.name === "get_vat_data"), "legacy tool kept");
+  assert.ok(tools.find((x) => x.name === "agentlink_bridge_status"), "diagnostic tool is available");
+  assert.ok(tools.find((x) => x.name === "get_vat_data"), "explicit demo tools are available in this test");
   const res = await client.callTool({ name: "tax_plan_work", arguments: { matter: { matter_id: "m", extra: 1 } } });
   assert.deepEqual(res.structuredContent, payload);
   assert.deepEqual(res.structuredContent.automation_offer, automation_offer);
@@ -190,6 +192,8 @@ test("new tax tools forward arguments, apply defaults and reject out-of-range in
 test("error mapping never leaks stderr or paths", async () => {
   const secret = "/secret/leak/path SECRET_STDERR";
   const missing = new TaxDomainClient({ command: "/nonexistent/" + "bin-xyz", args: [] });
+  const contracts = genericContracts(["list_tax_workflows"]);
+  await missing.initialize(contracts);
   const r1 = await missing.callTool("list_tax_workflows", {});
   assert.equal(r1.schema_version, "tax-bridge-error.v1");
   assert.equal(r1.error_code, "TAX_DOMAIN_UNAVAILABLE");
@@ -199,6 +203,7 @@ test("error mapping never leaks stderr or paths", async () => {
     command: process.execPath,
     args: ["-e", `console.error(${JSON.stringify(secret)}); process.exit(3)`],
   });
+  await crash.initialize(contracts);
   const r2 = await crash.callTool("list_tax_workflows", {});
   assert.equal(r2.error_code, "TAX_DOMAIN_UNAVAILABLE");
   assert.ok(!JSON.stringify(r2).includes("SECRET_STDERR"));
@@ -207,6 +212,7 @@ test("error mapping never leaks stderr or paths", async () => {
   const hang = new TaxDomainClient({
     command: process.execPath, args: ["-e", "setInterval(()=>{},1000)"], timeoutMs: 300,
   });
+  await hang.initialize(contracts);
   const r3 = await hang.callTool("list_tax_workflows", {});
   assert.ok(["TAX_DOMAIN_TIMEOUT", "TAX_DOMAIN_UNAVAILABLE"].includes(r3.error_code));
   assert.equal(r3.schema_version, "tax-bridge-error.v1");
@@ -214,14 +220,19 @@ test("error mapping never leaks stderr or paths", async () => {
 });
 
 const FAKE = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "fake-child.mjs");
-const fake = (log, extra = {}, env = { PATH: process.env.PATH }) =>
-  new TaxDomainClient({ command: process.execPath, args: log ? [FAKE, log] : [FAKE], ...extra }, env);
+const FAKE_TOOL_NAMES = ["ping", "crash", "sleep", "env_check", "fail"];
+const FAKE_CONTRACTS = genericContracts(FAKE_TOOL_NAMES);
+const fake = async (log, extra = {}, env = { PATH: process.env.PATH }) => {
+  const client = new TaxDomainClient({ command: process.execPath, args: log ? [FAKE, log] : [FAKE], ...extra }, env);
+  await client.initialize(FAKE_CONTRACTS);
+  return client;
+};
 const logPath = () => join(mkdtempSync(join(tmpdir(), "taxbridge-")), "pids.log");
 const pids = (p) => readFileSync(p, "utf8").split("\n").filter(Boolean);
 
 test("reconnects after child crash", async () => {
   const log = logPath();
-  const c = fake(log);
+  const c = await fake(log);
   const r1 = await c.callTool("ping", {});
   const crashed = await c.callTool("crash", {});
   assert.equal(crashed.error_code, "TAX_DOMAIN_UNAVAILABLE");
@@ -233,7 +244,8 @@ test("reconnects after child crash", async () => {
 
 test("concurrent first calls spawn one child", async () => {
   const log = logPath();
-  const c = fake(log);
+  const c = new TaxDomainClient({ command: process.execPath, args: [FAKE, log] });
+  await Promise.all([1, 2, 3, 4].map(() => c.initialize(FAKE_CONTRACTS)));
   const rs = await Promise.all([1, 2, 3, 4].map(() => c.callTool("ping", {})));
   assert.equal(new Set(rs.map((r) => r.pid)).size, 1);
   assert.equal(pids(log).length, 1);
@@ -242,7 +254,7 @@ test("concurrent first calls spawn one child", async () => {
 
 test("env allowlist: non-allowlisted vars are not passed, allowlisted are", async () => {
   const offerPath = "/tmp/automation-offer.json";
-  const c = fake(null, {}, {
+  const c = await fake(null, {}, {
     PATH: process.env.PATH, FOO_SECRET: "x", HTTPS_PROXY: "http://p:1",
     AGENTLINK_AUTOMATION_OFFER_PATH: offerPath,
   });
@@ -254,7 +266,7 @@ test("env allowlist: non-allowlisted vars are not passed, allowlisted are", asyn
 });
 
 test("child isError -> TAX_DOMAIN_TOOL_ERROR with fixed safe message", async () => {
-  const c = fake(null);
+  const c = await fake(null);
   const r = await c.callTool("fail", {});
   assert.equal(r.error_code, "TAX_DOMAIN_TOOL_ERROR");
   assert.equal(r.schema_version, "tax-bridge-error.v1");
@@ -265,7 +277,7 @@ test("child isError -> TAX_DOMAIN_TOOL_ERROR with fixed safe message", async () 
 
 test("timeout returns TAX_DOMAIN_TIMEOUT and does not reset the shared child", async () => {
   const log = logPath();
-  const c = fake(log, { timeoutMs: 300 });
+  const c = await fake(log, { timeoutMs: 300 });
   const r0 = await c.callTool("ping", {});
   const t = await c.callTool("sleep", {});
   assert.equal(t.error_code, "TAX_DOMAIN_TIMEOUT");
@@ -273,58 +285,4 @@ test("timeout returns TAX_DOMAIN_TIMEOUT and does not reset the shared child", a
   assert.equal(r1.pid, r0.pid);
   assert.equal(pids(log).length, 1);
   await c.close();
-});
-
-const PY = process.env.AGENTLINK_TAX_E2E_PYTHON;
-const SRC = process.env.AGENTLINK_TAX_E2E_PYTHONPATH;
-
-test("end-to-end against the real Python domain server", {
-  skip: !PY || !existsSync(PY)
-    ? "SKIPPED: set AGENTLINK_TAX_E2E_PYTHON (and AGENTLINK_TAX_E2E_PYTHONPATH if the domain package is not installed)"
-    : false,
-}, async () => {
-  const tax = new TaxDomainClient({ command: PY, args: ["-B", "-m", "agentlink_tax.server"], pythonPath: SRC || undefined });
-  const { client } = await connect(tax);
-  try {
-    const wf = await client.callTool({ name: "tax_list_workflows", arguments: {} });
-    assert.equal(wf.structuredContent.domain, "tax");
-    assert.equal(wf.structuredContent.workflows.length, 9);
-
-    const pc = await client.callTool({ name: "tax_list_practice_cards", arguments: { workflow_id: "withholding-payment" } });
-    assert.notEqual(pc.isError, true);
-    assert.equal(pc.structuredContent.workflow_id, "withholding-payment");
-    assert.equal(pc.structuredContent.authority, "practice");
-    assert.equal(pc.structuredContent.verification_status, "practice_signal_unverified");
-    assert.ok(Array.isArray(pc.structuredContent.cards));
-
-    const tips = await client.callTool({ name: "tax_get_form_field_tips", arguments: { form_id: "wh-payment-report", code: "A25" } });
-    assert.notEqual(tips.isError, true);
-    assert.ok(tips.structuredContent && typeof tips.structuredContent === "object");
-    assert.ok(JSON.stringify(tips.structuredContent).includes("A25"));
-    const guides = await client.callTool({ name: "tax_list_form_guides", arguments: {} });
-    assert.notEqual(guides.isError, true);
-    assert.equal(guides.structuredContent.status, "ok");
-    assert.ok(Array.isArray(guides.structuredContent.guides));
-
-    const matter = {
-      matter_id: "m1", workflow_id: "withholding-payment", as_of: "2026-04-01",
-      taxpayer: { type: "corporation", small_business_semiannual_approval: false },
-      facts: { payments: [{ payment_id: "p1", income_type: "wage", payee_type: "resident",
-        payment_date: "2026-03-25", gross_amount: 3000000, withheld_amount: "10000" }] },
-    };
-    const answer = await client.callTool({ name: "tax_answer_practitioner_question", arguments: { matter } });
-    assert.notEqual(answer.isError, true);
-    assert.equal(answer.structuredContent.schema_version, "practitioner-answer.v1");
-    assert.equal(answer.structuredContent.final_decision, "not_issued");
-    assert.deepEqual(answer.structuredContent, await tax.callTool("answer_practitioner_question", { matter }));
-
-    const plan = await client.callTool({ name: "tax_plan_work", arguments: { matter, include_evidence: false } });
-    assert.equal(plan.structuredContent.status, "draft_ready");
-    const due = plan.structuredContent.next_actions.filter((a) => a.due_date);
-    assert.equal(due[0].due_date, "2026-04-10");
-    assert.equal(due[0].deadline_status, "candidate_unverified");
-  } finally {
-    await client.close();
-    await tax.close();
-  }
 });

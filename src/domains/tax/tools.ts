@@ -5,9 +5,12 @@
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
 import type { TaxDomainClientLike } from "./bridge.js";
 import { isBridgeError } from "./bridge.js";
+import type { ToolContract } from "../discovery.js";
 
 const NOTICE =
   " Results are drafts for review; applicability is not determined and no tax amount is computed." +
@@ -20,7 +23,14 @@ const annotations = (openWorld: boolean) => ({
   openWorldHint: openWorld,
 });
 
-export function registerTaxDomainTools(server: McpServer, client: TaxDomainClientLike): void {
+export interface RegisteredDomainTools {
+  contracts: ToolContract[];
+  handles: RegisteredTool[];
+}
+
+export function registerTaxDomainTools(server: McpServer, client: TaxDomainClientLike): RegisteredDomainTools {
+  const contracts: ToolContract[] = [];
+  const handles: RegisteredTool[] = [];
   const reg = (
     name: string,
     domainTool: string,
@@ -28,14 +38,13 @@ export function registerTaxDomainTools(server: McpServer, client: TaxDomainClien
     shape: z.ZodRawShape,
     openWorld = false,
   ) => {
-    server.tool(name, description + NOTICE, shape, annotations(openWorld), async (args) => {
-      const result = await client.callTool(domainTool, args as Record<string, unknown>);
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify(result) }],
-        structuredContent: result,
-        ...(isBridgeError(result) ? { isError: true } : {}),
-      };
+    const handle = server.tool(name, description + NOTICE, shape, annotations(openWorld), async (args) => {
+      const result = await client.callToolResult(domainTool, args as Record<string, unknown>);
+      return { ...result, ...(isBridgeError(result.structuredContent) ? { isError: true } : {}) };
     });
+    handle.disable();
+    handles.push(handle);
+    contracts.push({ publicName: name, domainName: domainTool, inputSchema: toJsonSchemaCompat(z.object(shape), { pipeStrategy: "input" }) });
   };
 
   reg("tax_list_workflows", "list_tax_workflows",
@@ -147,4 +156,9 @@ export function registerTaxDomainTools(server: McpServer, client: TaxDomainClien
       query: z.string().max(100).optional().describe("Substring of label/instruction (라벨·작성방법 필터)"),
       limit: z.number().int().min(1).max(50).default(20).describe("Max tips (1-50)"),
     });
+
+  client.setStatusListener((status) => {
+    for (const handle of handles) status.state === "ready" ? handle.enable() : handle.disable();
+  });
+  return { contracts, handles };
 }
