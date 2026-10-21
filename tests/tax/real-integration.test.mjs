@@ -126,6 +126,19 @@ test("installed tax child completes a withholding roundtrip through upper MCP st
     const contract = await call("tax_get_workflow_contract", { workflow_id: "withholding-payment" });
     assert.equal(contract.id, "withholding-payment");
     assert.equal(contract.status, "implemented");
+    const paymentRef = contract.facts_schema?.properties?.payments?.items?.$ref;
+    assert.match(paymentRef ?? "", /^#\/\$defs\//,
+      "the upper bridge should preserve the native payment schema reference");
+    const paymentSchemaName = paymentRef.slice("#/$defs/".length);
+    const paymentProperties = contract.facts_schema?.$defs?.[paymentSchemaName]?.properties;
+    assert.ok(paymentProperties, "the upper bridge should preserve the native Payment definition");
+    assert.deepEqual([...(paymentProperties.withholding_profile?.enum ?? [])].sort(), [
+      "business_lecture", "business_personal_service", "other_lecture", "unknown",
+    ], "the upper contract should preserve the bounded payment-profile enum");
+    assert.deepEqual([...(paymentProperties.service_subtype?.enum ?? [])].sort(), [
+      "artwork_design", "authorship", "composition", "entertainment_direction", "entertainment_filming",
+      "illustration", "proofreading", "shorthand", "translation", "unknown", "unsupported", "voice_acting",
+    ], "the upper contract should preserve the strict personal-service subtype enum");
 
     const practiceCards = await call("tax_list_practice_cards", { workflow_id: "withholding-payment" });
     assert.equal(practiceCards.workflow_id, "withholding-payment");
