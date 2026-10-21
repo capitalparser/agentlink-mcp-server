@@ -2,14 +2,9 @@
 
 This guide connects the upper MCP server to an installed tax-domain MCP package. The upper server starts and verifies the configured tax child before it accepts MCP connections, then advertises tax tools only after the child has listed and passed the expected tool-contract checks. Subsidy and demo tools are disabled by default.
 
-## Required installed artifacts
+## Required installed artifact
 
-You need both of these authorized artifacts from their respective owners:
-
-1. The tax-domain Python wheel, installed into a dedicated Python 3.12 environment.
-2. The matching tax registry artifact, unpacked into a stable directory.
-
-The wheel does not include the registry artifact. Access to both is a setup prerequisite; this guide does not assume that either artifact has a public download location. Do not use a source checkout or `PYTHONPATH` as the runtime installation.
+Use the authorized tax-domain Python wheel in a dedicated Python 3.12 environment. The wheel includes the matching canonical registry, so no separate registry artifact is required. Do not use a source checkout or `PYTHONPATH` as the runtime installation.
 
 Create the environment and install the wheel supplied to you:
 
@@ -18,7 +13,7 @@ python3.12 -m venv /path/to/tax-venv
 /path/to/tax-venv/bin/python -m pip install /path/to/authorized/tax-domain.whl
 ```
 
-Unpack the separately supplied registry artifact to a directory that the MCP process can read. Set `AGENTLINK_TAX_REGISTRY` to that directory. Keep the wheel and registry from the same approved release.
+The installed server uses the registry bundled at `agentlink_tax/_registry` by default. `AGENTLINK_TAX_REGISTRY` is an optional exact-path override for compatibility. When set, that path replaces the bundled registry; an empty, missing, malformed, or invalid override fails startup without falling back to the bundle.
 
 Use the Python MCP SDK 1.x dependency range supported by that wheel. If the child cannot complete MCP initialization because one of its imports is missing or has moved, ask the artifact owner for a compatible wheel or dependency set; installing the package alone does not establish runtime compatibility. The upper bridge reports only a safe status/error code and does not expose child tracebacks.
 
@@ -36,15 +31,14 @@ Add a server entry to the MCP client's configuration. Replace the placeholders w
       "args": ["/path/to/upper-mcp/dist/index.js"],
       "env": {
         "AGENTLINK_TAX_MCP_COMMAND": "/path/to/tax-venv/bin/python",
-        "AGENTLINK_TAX_MCP_ARGS": "[\"-B\",\"-m\",\"agentlink_tax.server\"]",
-        "AGENTLINK_TAX_REGISTRY": "/path/to/tax-registry"
+        "AGENTLINK_TAX_MCP_ARGS": "[\"-B\",\"-m\",\"agentlink_tax.server\"]"
       }
     }
   }
 }
 ```
 
-`AGENTLINK_TAX_MCP_ARGS` is a JSON array encoded as a string. The Python interpreter must be the environment where the wheel was installed. The registry path must point to the unpacked artifact directory. The wheel installation removes the need for a source-tree `PYTHONPATH`.
+`AGENTLINK_TAX_MCP_ARGS` is a JSON array encoded as a string. The Python interpreter must be the environment where the wheel was installed. The wheel installation removes the need for a separate registry artifact or a source-tree `PYTHONPATH`.
 
 The default startup exposes the verified tax tools and `agentlink_bridge_status`. Optional subsidy tools remain unavailable until their domain is explicitly configured. Stub/demo tools require the explicit `AGENTLINK_DEMO_TOOLS=1` opt-in.
 
@@ -52,7 +46,7 @@ The default startup exposes the verified tax tools and `agentlink_bridge_status`
 
 Call `agentlink_bridge_status` to inspect whether the tax domain is configured, its current state or safe error code, and the count/names of verified tools. It does not return local command lines, paths, credentials, child output, or tax facts.
 
-If startup shows an unavailable tax domain, check that the configured interpreter can import the installed package and that the registry directory exists and is readable. Correct the client environment and restart the MCP server. If the configured paths are already correct and a transient startup issue has cleared, call `agentlink_bridge_status` with `{ "refresh": true }` to retry connection and contract verification. Tax tools are advertised only after a successful refresh.
+If startup shows an unavailable tax domain, check that the configured interpreter can import the installed package and that its bundled registry is complete. If you deliberately set `AGENTLINK_TAX_REGISTRY`, also check that exact path; an invalid override does not use the bundled copy. Correct the client environment and restart the MCP server. If the configured paths are already correct and a transient startup issue has cleared, call `agentlink_bridge_status` with `{ "refresh": true }` to retry connection and contract verification. Tax tools are advertised only after a successful refresh.
 
 Do not copy private configuration values into logs or support messages. If the status contains a fixed error code, use it to route diagnosis while keeping machine paths and credentials local.
 
@@ -62,13 +56,12 @@ Do not copy private configuration values into logs or support messages. If the s
 
 ## Run the installed-child integration check
 
-The optional test launches the built upper MCP through the MCP SDK's stdio transport, then lets it launch the installed Python wheel and registry. It uses synthetic facts, disables external evidence lookup, and points credentials to a nonexistent temporary file. It never calls the tax planner directly.
+The optional test launches the built upper MCP through the MCP SDK's stdio transport, then lets it launch the installed Python wheel with its bundled registry. It uses synthetic facts, disables external evidence lookup, and points credentials to a nonexistent temporary file. It never calls the tax planner directly.
 
 ```sh
 npm run build
 AGENTLINK_TEST_TAX_PYTHON=/path/to/tax-venv/bin/python \
-AGENTLINK_TEST_TAX_REGISTRY=/path/to/tax-registry \
 npm run test:integration
 ```
 
-The ordinary test suite may skip this integration when either variable is missing or points to a missing path. `test:integration` sets `AGENTLINK_REQUIRE_TAX_INTEGRATION=1`, so missing or invalid setup fails instead of being reported as a skip. The test removes its temporary data on success; after a failure, it preserves a bounded upper-server stderr log in the process temporary directory for local diagnosis.
+The ordinary test suite may skip this integration when the interpreter is missing. `test:integration` sets `AGENTLINK_REQUIRE_TAX_INTEGRATION=1`, so a missing interpreter fails instead of being reported as a skip. `AGENTLINK_TEST_TAX_REGISTRY` is optional for deliberate override compatibility checks; if explicitly set to an invalid path, the test fails. The test removes its temporary data on success; after a failure, it preserves a bounded upper-server stderr log in the process temporary directory for local diagnosis.
