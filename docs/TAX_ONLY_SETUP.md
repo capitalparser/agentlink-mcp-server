@@ -52,11 +52,13 @@ Do not copy private configuration values into logs or support messages. If the s
 
 ## Result limits
 
-`tax_plan_work` returns a review draft. It does not determine legal applicability, calculate a tax amount, file, or submit anything. The withholding deadline is a candidate and must be checked against current rules and calendars. When the external holiday provider is unavailable, the result retains a warning that public and substitute holidays were not applied; that fallback is not verified holiday data. Missing facts stay as questions. The eight other listed workflows, including VAT, remain `contract_only` until separately implemented and verified.
+`tax_plan_work` returns a review draft. It can calculate withholding for two explicitly selected payment profiles when all required user facts are present and the current-law basis is fetched and matched: `business_lecture` for continuing, repeated independent lectures, and `other_lecture` for temporary lectures where actual expenses do not exceed the statutory allowance. Set `include_evidence=true`; without matched evidence or complete facts, the payment has no calculated amounts. These scoped payment results do not decide applicability for the whole matter, which remains `not_determined`, and they do not issue a final filing decision, file, or submit anything. The facts are user-supplied and pending review. An input `withheld_amount` remains the actual reported amount and is kept separate from the calculated amount. Other income types, lecture classifications outside these conditions, and the eight other listed workflows including VAT remain outside this calculation scope; those workflows remain `contract_only` until separately implemented and verified.
+
+The withholding deadline remains a candidate and must be checked against current rules and calendars. When the external holiday provider is unavailable, the result retains a warning that public and substitute holidays were not applied; that fallback is not verified holiday data. Missing facts stay as questions.
 
 ## Run the installed-child integration check
 
-The optional test launches the built upper MCP through the MCP SDK's stdio transport, then lets it launch the installed Python wheel with its bundled registry. It uses synthetic facts, disables external evidence lookup, and points credentials to a nonexistent temporary file. It never calls the tax planner directly.
+The offline integration test launches the built upper MCP through the MCP SDK's stdio transport, then lets it launch the installed Python wheel with its bundled registry. It uses synthetic wage facts, disables external evidence lookup, and points credentials to a nonexistent temporary file. It never calls the tax planner directly.
 
 ```sh
 npm run build
@@ -64,4 +66,4 @@ AGENTLINK_TEST_TAX_PYTHON=/path/to/tax-venv/bin/python \
 npm run test:integration
 ```
 
-The ordinary test suite may skip this integration when the interpreter is missing. `test:integration` sets `AGENTLINK_REQUIRE_TAX_INTEGRATION=1`, so a missing interpreter fails instead of being reported as a skip. `AGENTLINK_TEST_TAX_REGISTRY` is optional for deliberate override compatibility checks; if explicitly set to an invalid path, the test fails. The test removes its temporary data on success; after a failure, it preserves a bounded upper-server stderr log in the process temporary directory for local diagnosis.
+The ordinary test suite may skip this integration when the interpreter is missing. `test:integration` sets `AGENTLINK_REQUIRE_TAX_INTEGRATION=1`, so a missing interpreter fails instead of being reported as a skip. `AGENTLINK_TEST_TAX_REGISTRY` is optional for deliberate override compatibility checks; if explicitly set to an invalid path, the test fails. The required `test:integration:live` acceptance uses the installed noneditable wheel, real law.go.kr credentials, and current-law retrieval to verify both lecture profiles and their projected practitioner amounts. It fails clearly when the current date is outside the supported evidence window or when law retrieval, identity, version, hash, or semantic checks do not pass. The test removes its temporary data on completion and keeps any requested calculation receipt under the caller-provided scratch directory with owner-only permissions.

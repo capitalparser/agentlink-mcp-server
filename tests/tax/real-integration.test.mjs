@@ -38,14 +38,6 @@ function matter({ approval = false, payments = [payment()], workflowId = "withho
   };
 }
 
-function hasKey(value, key) {
-  if (Array.isArray(value)) return value.some((item) => hasKey(item, key));
-  if (value && typeof value === "object") {
-    return Object.hasOwn(value, key) || Object.values(value).some((item) => hasKey(item, key));
-  }
-  return false;
-}
-
 test("installed tax child completes a withholding roundtrip through upper MCP stdio", {
   timeout: 90_000,
   skip: missingPython && !required && !invalidOverride
@@ -161,6 +153,14 @@ test("installed tax child completes a withholding roundtrip through upper MCP st
     assert.equal(completed.status, "draft_ready");
     assert.equal(completed.applicability, "not_determined");
     assert.equal(completed.calculation_status, "not_determined");
+    assert.equal(completed.withholding_calculations.length, 1);
+    assert.equal(completed.withholding_calculations[0].status, "unsupported",
+      "a wage payment with no lecture profile remains outside the calculation scope");
+    for (const field of ["expense_rate", "expense_amount", "income_amount", "tax_base", "national_rate",
+      "national_tax", "local_rate", "local_tax", "total_withholding", "net_payment"]) {
+      assert.equal(completed.withholding_calculations[0][field], null,
+        `unsupported wage payments must not contain a calculated ${field}`);
+    }
     const dueActions = completed.next_actions.filter((action) => action.due_date);
     assert.equal(dueActions.length, 1);
     assert.equal(dueActions[0].due_date, "2026-04-10");
@@ -189,7 +189,9 @@ test("installed tax child completes a withholding roundtrip through upper MCP st
     assert.ok(missingWithheldAmount.questions.some((question) => question.fact_key === "payments[p1].withheld_amount"));
     const paymentFacts = missingWithheldAmount.confirmed_facts.find((fact) => fact.key === "payments");
     assert.equal(paymentFacts.value[0].withheld_amount, null);
-    assert.ok(!hasKey(missingWithheldAmount, "tax_amount"), "the domain must not infer a tax amount");
+    assert.equal(missingWithheldAmount.withholding_calculations[0].status, "unsupported");
+    assert.equal(missingWithheldAmount.withholding_calculations[0].national_tax, null,
+      "legacy wage rows must not receive lecture calculation amounts");
 
     const unknownApproval = await plan(matter({ approval: null }));
     assert.equal(unknownApproval.status, "needs_facts");
