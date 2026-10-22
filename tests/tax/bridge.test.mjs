@@ -86,7 +86,7 @@ test("tool list has 19 read-only tax tools; structuredContent passes through unc
   assert.equal(tools.find((t) => t.name === "tax_plan_work").annotations.openWorldHint, true);
 });
 
-test("lecture-calculation facts pass through unchanged and tool descriptions state the evidence boundary", async () => {
+test("lecture and personal-service calculation facts pass through unchanged with a bounded evidence scope", async () => {
   const calls = [];
   const fake = { async callTool(name, args) { calls.push([name, args]); return { status: "ok" }; }, async close() {} };
   const { client } = await connect(fake);
@@ -96,6 +96,15 @@ test("lecture-calculation facts pass through unchanged and tool descriptions sta
     for (const name of ["tax_plan_work", "tax_answer_practitioner_question"]) {
       assert.match(description(name), /business_lecture/);
       assert.match(description(name), /other_lecture/);
+      assert.match(description(name), /business_personal_service/);
+      for (const subtype of ["authorship", "artwork_design", "illustration", "composition", "voice_acting",
+        "entertainment_direction", "entertainment_filming", "proofreading", "translation", "shorthand"]) {
+        assert.match(description(name), new RegExp(subtype));
+      }
+      for (const label of ["저술 용역", "도안 용역", "삽화 용역", "작곡 용역", "성우 용역",
+        "연예에 관한 연출 용역", "연예에 관한 촬영 용역", "교정 용역", "번역 용역", "속기 용역"]) {
+        assert.ok(description(name).includes(label), `tool description must include ${label}`);
+      }
       assert.match(description(name), /matched current-law evidence/);
       assert.match(description(name), /whole-matter applicability remains not_determined/);
       assert.doesNotMatch(description(name), /no tax amount is computed/);
@@ -125,13 +134,31 @@ test("lecture-calculation facts pass through unchanged and tool descriptions sta
         activity_continuity: "continuing",
       }] },
     };
+    const personalServiceMatter = {
+      ...lectureMatter,
+      matter_id: "personal-service-forwarding",
+      facts: { payments: [{
+        ...lectureMatter.facts.payments[0],
+        payment_id: "translation-1",
+        withholding_profile: "business_personal_service",
+        service_subtype: "translation",
+        lecture_to_many: false,
+        expenses_exceed_standard: true,
+      }] },
+    };
     await client.callTool({ name: "tax_plan_work", arguments: { matter: lectureMatter, include_evidence: true } });
     await client.callTool({ name: "tax_answer_practitioner_question", arguments: {
       matter: lectureMatter, include_evidence: true,
     } });
+    await client.callTool({ name: "tax_plan_work", arguments: { matter: personalServiceMatter, include_evidence: true } });
+    await client.callTool({ name: "tax_answer_practitioner_question", arguments: {
+      matter: personalServiceMatter, include_evidence: true,
+    } });
     assert.deepEqual(calls, [
       ["plan_tax_work", { matter: lectureMatter, include_evidence: true }],
       ["answer_practitioner_question", { matter: lectureMatter, include_evidence: true }],
+      ["plan_tax_work", { matter: personalServiceMatter, include_evidence: true }],
+      ["answer_practitioner_question", { matter: personalServiceMatter, include_evidence: true }],
     ]);
   } finally {
     await client.close();
