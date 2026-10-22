@@ -86,6 +86,58 @@ test("tool list has 19 read-only tax tools; structuredContent passes through unc
   assert.equal(tools.find((t) => t.name === "tax_plan_work").annotations.openWorldHint, true);
 });
 
+test("lecture-calculation facts pass through unchanged and tool descriptions state the evidence boundary", async () => {
+  const calls = [];
+  const fake = { async callTool(name, args) { calls.push([name, args]); return { status: "ok" }; }, async close() {} };
+  const { client } = await connect(fake);
+  try {
+    const { tools } = await client.listTools();
+    const description = (name) => tools.find((tool) => tool.name === name)?.description ?? "";
+    for (const name of ["tax_plan_work", "tax_answer_practitioner_question"]) {
+      assert.match(description(name), /business_lecture/);
+      assert.match(description(name), /other_lecture/);
+      assert.match(description(name), /matched current-law evidence/);
+      assert.match(description(name), /whole-matter applicability remains not_determined/);
+      assert.doesNotMatch(description(name), /no tax amount is computed/);
+    }
+
+    const lectureMatter = {
+      matter_id: "lecture-forwarding",
+      workflow_id: "withholding-payment",
+      as_of: "2026-10-22",
+      taxpayer: { type: "corporation" },
+      facts: { payments: [{
+        payment_id: "lecture-1",
+        income_type: "business",
+        payee_type: "resident",
+        payee_entity: "individual",
+        payment_date: "2026-10-22",
+        gross_amount: 33333,
+        withholding_profile: "business_lecture",
+        domestic_payment: true,
+        lecture_to_many: true,
+        employment_relationship: false,
+        independent_service: true,
+        has_business_facilities: false,
+        uses_hired_labor: false,
+        special_tax_treatment: false,
+        single_payment_complete: true,
+        activity_continuity: "continuing",
+      }] },
+    };
+    await client.callTool({ name: "tax_plan_work", arguments: { matter: lectureMatter, include_evidence: true } });
+    await client.callTool({ name: "tax_answer_practitioner_question", arguments: {
+      matter: lectureMatter, include_evidence: true,
+    } });
+    assert.deepEqual(calls, [
+      ["plan_tax_work", { matter: lectureMatter, include_evidence: true }],
+      ["answer_practitioner_question", { matter: lectureMatter, include_evidence: true }],
+    ]);
+  } finally {
+    await client.close();
+  }
+});
+
 test("practitioner tools forward arguments and reject invalid ranges before domain calls", async () => {
   const calls = [];
   const fake = { async callTool(name, args) { calls.push([name, args]); return {}; }, async close() {} };
