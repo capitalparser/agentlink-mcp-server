@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../../dist/server.js';
 import { SubsidyDomainClient } from '../../dist/domains/subsidy/bridge.js';
+import { TaxDomainClient } from '../../dist/domains/tax/bridge.js';
 
 const PY = process.env.AGENTLINK_SUBSIDY_E2E_PYTHON;
 const SRC = process.env.AGENTLINK_SUBSIDY_E2E_PYTHONPATH;
@@ -39,10 +40,11 @@ test('T6: real Python topics wrapper, local official error, card answer and conv
     REGULATION_OFFICIAL_TEXT_DIR: join(work, 'no-official-copies'),
     REGULATION_USAGE_DIR: join(work, 'usage'), REGULATION_USAGE_SIGNALS: 'off',
   });
-  const server = createServer({ subsidyDomainClient: domain, taxDomainClient: { async callTool() { return {}; }, async close() {} } });
+  const tax = new TaxDomainClient({ command: '', args: [], configInvalid: true });
+  const server = await createServer({ subsidyDomainClient: domain, taxDomainClient: tax });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'subsidy-e2e', version: '0' });
-  t.after(async () => { await client.close(); await server.close(); await domain.close(); });
+  t.after(async () => { await client.close(); await server.close(); });
   await Promise.all([server.connect(a), client.connect(b)]);
   const listed = await client.listTools();
   const publishedInstructions = listed.tools.find(x => x.name === 'subsidy_answer_practitioner_question').description;

@@ -6,13 +6,17 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createServer } from '../../dist/server.js';
 import { SubsidyDomainClient, subsidyConfigFromEnv } from '../../dist/domains/subsidy/bridge.js';
+import { registerSubsidyDomainTools } from '../../dist/domains/subsidy/tools.js';
+import { memoryDomainClient, genericContracts } from '../tax/fixtures/memory-domain-client.mjs';
 
 const FAKE = fileURLToPath(new URL('./fixtures/fake-child.mjs', import.meta.url));
 export const SUBSIDY = ['list_workflows', 'get_reference_bundle', 'search_references', 'get_reference',
   'answer_practitioner_question', 'list_practitioner_topics', 'get_official_text'];
 const BASELINE = [
+  'agentlink_bridge_status',
   'get_business_info', 'get_disaster_alerts', 'get_income_tax_summary', 'get_procurement_data', 'get_tax_invoice',
   'get_vat_data', 'search_court_precedents', 'search_public_notices', 'tax_answer_practitioner_question',
   'tax_check_business_status', 'tax_export_rule_cards', 'tax_find_office', 'tax_get_automation_offer',
@@ -20,14 +24,21 @@ const BASELINE = [
   'tax_list_form_guides', 'tax_list_holidays', 'tax_list_practice_cards', 'tax_list_rule_cards', 'tax_list_workflows',
   'tax_plan_work', 'tax_search_forms', 'tax_search_interpretations', 'tax_search_law', 'verify_business_registration',
 ];
-const fake = (config = {}, env = { PATH: process.env.PATH }) => new SubsidyDomainClient({
-  command: process.execPath, args: [FAKE], ...config,
-}, env);
+const schemaSource = new McpServer({ name: 'subsidy-contract-source', version: '0' });
+const DOMAIN_CONTRACTS = registerSubsidyDomainTools(schemaSource, memoryDomainClient()).contracts;
+const FAKE_TOOL_NAMES = ['ping', 'crash', 'sleep', 'env_check', 'fail', 'structural_error', 'missing_structured', 'array_structured'];
+const FAKE_CONTRACTS = [...DOMAIN_CONTRACTS, ...genericContracts(FAKE_TOOL_NAMES)];
+const fake = async (config = {}, env = { PATH: process.env.PATH }) => {
+  const client = new SubsidyDomainClient({ command: process.execPath, args: [FAKE], ...config }, env);
+  await client.initialize(FAKE_CONTRACTS);
+  return client;
+};
 const spawnLog = () => join(mkdtempSync(join(tmpdir(), 'subsidybridge-')), 'pids.log');
 const pids = p => readFileSync(p, 'utf8').trim().split('\n');
 async function connect(t, subsidy) {
-  const tax = { async callTool() { return {}; }, async close() {} };
-  const server = createServer({ subsidyDomainClient: subsidy, taxDomainClient: tax });
+  const tax = memoryDomainClient();
+  const domain = typeof subsidy.initialize === 'function' ? subsidy : memoryDomainClient(subsidy);
+  const server = await createServer({ subsidyDomainClient: domain, taxDomainClient: tax, demo: true });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'subsidy-tests', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);
@@ -43,7 +54,7 @@ const rejected = async (client, name, args) => {
 
 test('T1: exact 27 legacy + 7 subsidy tools, notices, annotations and stdio structured passthrough', async t => {
   const log = spawnLog();
-  const subsidy = fake({ args: [FAKE, log] });
+  const subsidy = await fake({ args: [FAKE, log] });
   const client = await connect(t, subsidy);
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map(x => x.name).sort(), [...BASELINE, ...SUBSIDY.map(x => `subsidy_${x}`)].sort());
@@ -130,10 +141,10 @@ test('P3-1 serialized argument envelope enforces inclusive 65,536-byte UTF-8 lim
 
 test('P3-2 stale failed client cannot reset a replacement child', async t => {
   const log = spawnLog();
-  const c = fake({ args: [FAKE, log], timeoutMs: 5000 });
+  const c = await fake({ args: [FAKE, log], timeoutMs: 5000 });
   t.after(() => c.close());
   const first = await c.callTool('ping', {});
-  const old = c.client;
+  const old = c.generation.client;
   let signalCaught;
   const caught = new Promise(resolve => { signalCaught = resolve; });
   let release;
@@ -216,8 +227,9 @@ test('T3: safe unavailable, timeout, tool and malformed-result errors', async t 
   const clients = [
     new SubsidyDomainClient({ command: '/nonexistent/SECRET_PATH', args: [] }),
     new SubsidyDomainClient({ command: process.execPath, args: ['-e', 'console.error("RAW_STDERR /secret/path"); process.exit(3)'] }),
-    new SubsidyDomainClient({ command: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'], timeoutMs: 300 }), fake(),
+    new SubsidyDomainClient({ command: process.execPath, args: ['-e', 'setInterval(()=>{},1000)'], timeoutMs: 300 }), await fake(),
   ];
+  await Promise.all(clients.slice(0, 3).map(client => client.initialize(genericContracts(['ping', 'fail', 'missing_structured', 'array_structured']))));
   t.after(async () => { await Promise.all(clients.map(c => c.close())); });
   for (const [index, name, expected] of [[0, 'ping', 'UNAVAILABLE'], [1, 'ping', 'UNAVAILABLE'], [2, 'ping', 'TIMEOUT'], [3, 'fail', 'TOOL_ERROR'], [3, 'missing_structured', 'ERROR'], [3, 'array_structured', 'ERROR']]) {
     const res = await clients[index].callTool(name, {});
@@ -230,7 +242,7 @@ test('T3: safe unavailable, timeout, tool and malformed-result errors', async t 
 
 test('T3: crash reconnect, first-call concurrency, timeout leaves shared child intact', async t => {
   const log = spawnLog();
-  const c = fake({ args: [FAKE, log], timeoutMs: 500 });
+  const c = await fake({ args: [FAKE, log], timeoutMs: 500 });
   t.after(() => c.close());
   const results = await Promise.all([1, 2, 3, 4].map(() => c.callTool('ping', {})));
   assert.equal(new Set(results.map(r => r.pid)).size, 1);
@@ -256,7 +268,7 @@ test('T4: actual child receives only allowlisted env; SDK defaults are removed',
   const previous = Object.fromEntries(['LOGNAME', 'SHELL', 'TERM', 'USER'].map(k => [k, process.env[k]]));
   for (const k of Object.keys(previous)) process.env[k] = `parent_${k}`;
   t.after(() => { for (const [k, v] of Object.entries(previous)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
-  const c = fake({ pythonPath: '/configured/pythonpath' }, env);
+  const c = await fake({ pythonPath: '/configured/pythonpath' }, env);
   t.after(() => c.close());
   const child = (await c.callTool('env_check', {})).env;
   // macOS initializes this native runtime variable even with spawn(env: {}).
@@ -268,7 +280,7 @@ test('T4: actual child receives only allowlisted env; SDK defaults are removed',
 });
 
 test('T5: structural domain errors and topic result wrappers pass unchanged without isError', async t => {
-  const domain = fake();
+  const domain = await fake();
   const payload = await domain.callTool('structural_error', {});
   t.after(() => domain.close());
   for (const result of [payload, { result: [{ need_id: 'pn.subsidy.labor.01' }] }, { result: { error: 'practitioner_registry_unavailable' } }]) {

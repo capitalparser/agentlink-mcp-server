@@ -1,12 +1,12 @@
-/**
- * AgentLink Korea - MCP Server Assembly
- *
- * Creates and configures the McpServer instance with all registered tools.
- * This is the central wiring point where tool modules are composed into
- * a complete MCP server ready for transport connection.
- */
+/** Verified AgentLink MCP server assembly. */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { DomainStatus, TaxDomainClientLike } from "./domains/tax/bridge.js";
+import { TaxDomainClient } from "./domains/tax/bridge.js";
+import type { SubsidyDomainClientLike, SubsidyDomainStatus } from "./domains/subsidy/bridge.js";
+import { SubsidyDomainClient, subsidyConfigFromEnv, subsidyDomainConfigured } from "./domains/subsidy/bridge.js";
+import { registerTaxDomainTools } from "./domains/tax/tools.js";
+import { registerSubsidyDomainTools } from "./domains/subsidy/tools.js";
 import { StubDataProvider } from "./types/index.js";
 import type { DataProvider } from "./types/index.js";
 import { registerTaxTools } from "./tools/tax.js";
@@ -14,57 +14,71 @@ import { registerBusinessTools } from "./tools/business.js";
 import { registerPublicDataTools } from "./tools/public-data.js";
 import { registerLegalTools } from "./tools/legal.js";
 import { registerDisasterTools } from "./tools/disaster.js";
-import { TaxDomainClient } from "./domains/tax/bridge.js";
-import type { TaxDomainClientLike } from "./domains/tax/bridge.js";
-import { registerTaxDomainTools } from "./domains/tax/tools.js";
-
-import { SubsidyDomainClient } from "./domains/subsidy/bridge.js";
-import type { SubsidyDomainClientLike } from "./domains/subsidy/bridge.js";
-import { registerSubsidyDomainTools } from "./domains/subsidy/tools.js";
+import { z } from "zod";
 
 export interface CreateServerOptions {
-  /** Custom data provider (defaults to StubDataProvider for development) */
+  /** Explicit provider exposes the legacy data tools. */
   provider?: DataProvider;
-  /** Tax domain MCP client (defaults to a lazy stdio client configured from env) */
+  /** Explicit demonstration opt-in for StubDataProvider tools. */
+  demo?: boolean;
   taxDomainClient?: TaxDomainClientLike;
-  /** Subsidy/R&D domain client (lazy local stdio by default). */
   subsidyDomainClient?: SubsidyDomainClientLike;
 }
 
-/**
- * Create a fully configured AgentLink MCP server with all tools registered.
- */
-export function createServer(options: CreateServerOptions = {}): McpServer {
-  const provider = options.provider ?? new StubDataProvider();
+function emptySubsidyStatus(): SubsidyDomainStatus {
+  return { configured: false, state: "not_configured", verified_tool_names: [], verified_tool_count: 0 };
+}
 
-  const server = new McpServer({
-    name: "agentlink-korea",
-    version: "0.1.0",
-  });
+/** Build the server only after each configured domain has completed discovery. */
+export async function createServer(options: CreateServerOptions = {}): Promise<McpServer> {
+  const server = new McpServer({ name: "agentlink-korea", version: "0.1.0" });
+  const demo = options.demo === true || process.env.AGENTLINK_DEMO_TOOLS === "1";
+  if (demo || options.provider) {
+    const provider = options.provider ?? new StubDataProvider();
+    registerTaxTools(server, provider);
+    registerBusinessTools(server, provider);
+    registerPublicDataTools(server, provider);
+    registerLegalTools(server, provider);
+    registerDisasterTools(server, provider);
+  }
 
-  // Register all tool categories
-  registerTaxTools(server, provider);
-  registerBusinessTools(server, provider);
-  registerPublicDataTools(server, provider);
-  registerLegalTools(server, provider);
-  registerDisasterTools(server, provider);
-
-  // Tax domain bridge (lazy: the child process starts on first call)
   const taxClient = options.taxDomainClient ?? new TaxDomainClient();
-  registerTaxDomainTools(server, taxClient);
+  const subsidyConfigured = options.subsidyDomainClient !== undefined || subsidyDomainConfigured();
+  const subsidyClient = options.subsidyDomainClient ?? (subsidyConfigured ? new SubsidyDomainClient(subsidyConfigFromEnv()) : undefined);
+  const taxTools = registerTaxDomainTools(server, taxClient);
+  const subsidyTools = subsidyClient ? registerSubsidyDomainTools(server, subsidyClient) : undefined;
+
+  server.tool("agentlink_bridge_status", "Show which optional domain tools passed MCP discovery, or refresh unavailable domains.",
+    { refresh: z.boolean().optional().describe("Retry configured domains that are unavailable or invalid.") },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    async ({ refresh }) => {
+      if (refresh) {
+        await Promise.all([
+          taxClient.refresh(taxTools.contracts),
+          ...(subsidyClient && subsidyTools ? [subsidyClient.refresh(subsidyTools.contracts)] : []),
+        ]);
+      }
+      const status = {
+        schema_version: "agentlink-bridge-status.v1",
+        tax: taxClient.getStatus(),
+        subsidy: subsidyClient?.getStatus() ?? emptySubsidyStatus(),
+      };
+      return { content: [{ type: "text" as const, text: JSON.stringify(status) }], structuredContent: status };
+    });
+
+  await Promise.all([
+    taxClient.initialize(taxTools.contracts).catch(() => ({
+      configured: true, state: "unavailable", error_code: "TAX_DOMAIN_UNAVAILABLE", verified_tool_names: [], verified_tool_count: 0,
+    } satisfies DomainStatus)),
+    ...(subsidyClient && subsidyTools ? [subsidyClient.initialize(subsidyTools.contracts).catch(() => ({
+      configured: true, state: "unavailable", error_code: "SUBSIDY_DOMAIN_UNAVAILABLE", verified_tool_names: [], verified_tool_count: 0,
+    } satisfies SubsidyDomainStatus))] : []),
+  ]);
+
   const prevOnClose = server.server.onclose;
   server.server.onclose = () => {
-    void taxClient.close();
+    void Promise.all([taxClient.close(), ...(subsidyClient ? [subsidyClient.close()] : [])]);
     prevOnClose?.();
   };
-
-  const subsidyClient = options.subsidyDomainClient ?? new SubsidyDomainClient();
-  registerSubsidyDomainTools(server, subsidyClient);
-  const prevSubsidyOnClose = server.server.onclose;
-  server.server.onclose = () => {
-    void subsidyClient.close();
-    prevSubsidyOnClose?.();
-  };
-
   return server;
 }

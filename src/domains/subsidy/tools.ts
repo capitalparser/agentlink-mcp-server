@@ -1,7 +1,10 @@
 /** Read-only, source-preserving subsidy/R&D practitioner bridge. */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { RegisteredTool } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
 import { isBridgeError, type SubsidyDomainClientLike } from "./bridge.js";
+import type { ToolContract } from "../discovery.js";
 
 const NOTICE =
   " Results are drafts for review; applicability is not determined. Official text is a local copy from the National Law Information Center; check public_url for amendments." +
@@ -69,10 +72,18 @@ const facts = z.record(full("[a-z][a-z0-9_]*").refine(wellFormed), text(100)).re
 // Python str.strip whitespace (FEFF is deliberately not included).
 const pythonBlank = /^[\u0009-\u000d\u001c-\u0020\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]*(?![\s\S])/u;
 
-export function registerSubsidyDomainTools(server: McpServer, client: SubsidyDomainClientLike): void {
+export interface RegisteredSubsidyTools {
+  contracts: ToolContract[];
+  handles: RegisteredTool[];
+}
+
+export function registerSubsidyDomainTools(server: McpServer, client: SubsidyDomainClientLike): RegisteredSubsidyTools {
+  const contracts: ToolContract[] = [];
+  const handles: RegisteredTool[] = [];
   const reg = (name: string, description: string, shape: z.ZodRawShape,
     validate?: (args: Record<string, unknown>) => boolean) => {
-    server.registerTool(`subsidy_${name}`, {
+    const publicName = `subsidy_${name}`;
+    const handle = server.registerTool(publicName, {
       description: description + NOTICE, inputSchema: z.object(shape).strict(), annotations: ANNOTATIONS,
     }, async (args) => {
       if (!validPayload(args)) return {
@@ -83,10 +94,12 @@ export function registerSubsidyDomainTools(server: McpServer, client: SubsidyDom
       if (validate && !validate(args)) return {
         isError: true, content: [{ type: "text" as const, text: "Invalid arguments: provide exactly one of article_key or search." }],
       };
-      const result = await client.callTool(name, args);
-      return { content: [{ type: "text" as const, text: JSON.stringify(result) }], structuredContent: result,
-        ...(isBridgeError(result) ? { isError: true } : {}) };
+      const result = await client.callToolResult(name, args);
+      return { ...result, ...(isBridgeError(result.structuredContent) ? { isError: true } : {}) };
     });
+    handle.disable();
+    handles.push(handle);
+    contracts.push({ publicName, domainName: name, inputSchema: toJsonSchemaCompat(z.object(shape), { pipeStrategy: "input" }) });
   };
   reg("list_workflows", "List subsidy/R&D workflows and context fields.", {});
   reg("get_reference_bundle", "Get reference candidates, drafting templates and missing context.", {
@@ -110,4 +123,9 @@ export function registerSubsidyDomainTools(server: McpServer, client: SubsidyDom
     article_key: nullable(full("\\p{Decimal_Number}{7}")),
     search: nullable(text(60).refine((v) => !pythonBlank.test(v), { message: "Expected a nonblank search." })),
   }, (args) => (args.article_key != null) !== (args.search != null));
+
+  client.setStatusListener((status) => {
+    for (const handle of handles) status.state === "ready" ? handle.enable() : handle.disable();
+  });
+  return { contracts, handles };
 }

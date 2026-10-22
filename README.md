@@ -7,7 +7,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that p
 
 ## Available Tools
 
-### Tax Data (세무 데이터)
+### Demo data tools (데모 데이터, 명시적 opt-in 필요)
 | Tool | Description |
 |------|-------------|
 | `get_vat_data` | Retrieve VAT data for a business (부가가치세 데이터 조회) |
@@ -36,7 +36,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that p
 |------|-------------|
 | `get_disaster_alerts` | Retrieve disaster alerts from MOIS (행정안전부 재난 알림 조회) |
 
-보조금·R&D 실무자 도구 7개도 읽기 전용 로컬 브리지로 제공합니다: `subsidy_list_workflows`, `subsidy_get_reference_bundle`, `subsidy_search_references`, `subsidy_get_reference`, `subsidy_answer_practitioner_question`, `subsidy_list_practitioner_topics`, `subsidy_get_official_text`. 결과는 검토용 초안이며 적용 여부는 판단되지 않습니다. 공식 원문은 국가법령정보센터 로컬 사본이며 개정 여부는 `public_url`에서 확인하세요. 설치·환경 변수·사용 신호·한계는 [보조금 도메인 브리지 문서](docs/SUBSIDY_DOMAIN_BRIDGE.md)를 참고하세요. Work 도구는 범위 밖입니다.
+세무 도메인 도구는 설치된 도메인 MCP가 발견 및 계약 검증을 통과한 뒤에만 표시됩니다. 보조금·R&D 실무자 도구 7개는 별도로 설정한 경우에만 표시되며 같은 방식으로 검증됩니다. 도메인 도구의 결과는 검토용 초안이며 적용 여부는 판단되지 않습니다. 보조금 도메인 도구는 공식 원문 로컬 사본을 사용하며 개정 여부는 결과의 `public_url`에서 확인하세요. 설정과 한계는 [세무 전용 설정 안내](docs/TAX_ONLY_SETUP.md)와 [보조금 도메인 브리지 문서](docs/SUBSIDY_DOMAIN_BRIDGE.md)를 참고하세요. 데모 스텁 도구는 기본적으로 숨겨지며 `AGENTLINK_DEMO_TOOLS=1`로 명시적으로 켤 수 있습니다.
 
 ## Quick Start
 
@@ -89,17 +89,18 @@ npm run dev
 
 ## 세무 도메인 연결
 
-`agentlink-domain-tax-mcp`(Python stdio MCP 서버)를 로컬 stdio 브리지로 연결합니다. 자식 프로세스는 첫 호출 시 지연 실행되며 서버 종료 시 함께 종료됩니다. 기존 스텁 세무 도구(`get_vat_data` 등)는 그대로 유지됩니다.
+설치된 세무 도메인 MCP 서버를 로컬 stdio 브리지로 연결합니다. 시작 시 자식 서버의 `tools/list`를 페이지 제한과 시간 제한 안에서 읽고, 공개 도구 계약과 맞는 경우에만 해당 도메인의 도구를 표시합니다. 초기 검증이 끝난 뒤 상위 stdio 연결을 시작합니다. `agentlink_bridge_status`는 준비 상태와 검증된 도구 이름을 보여주며 `refresh: true`로 재검증을 시도할 수 있습니다.
 
 | 환경 변수 | 설명 | 기본값 |
 |---|---|---|
 | `AGENTLINK_TAX_MCP_COMMAND` | 실행 명령 | `python3` |
 | `AGENTLINK_TAX_MCP_ARGS` | 인자 (JSON 배열) | `["-m","agentlink_tax.server"]` |
 | `AGENTLINK_TAX_MCP_PYTHONPATH` | 자식 프로세스 `PYTHONPATH` (선택) | - |
+| `AGENTLINK_TAX_REGISTRY` | 별도로 제공된 레지스트리 아티팩트 경로 | 도메인 기본값 |
 
 자식 프로세스에는 `PATH, HOME, LANG, LC_ALL, TZ, TMPDIR, PYTHONPATH, AGENTLINK_CREDENTIALS_PATH, AGENTLINK_TAX_REGISTRY, AGENTLINK_AUTOMATION_OFFER_PATH, HTTPS_PROXY, HTTP_PROXY, NO_PROXY`(소문자 변형 포함), `SSL_CERT_FILE, REQUESTS_CA_BUNDLE`만 전달됩니다.
 
-도메인 레지스트리를 찾을 수 있어야 합니다: 도메인 패키지를 editable 설치하거나, `AGENTLINK_TAX_REGISTRY`를 지정하거나, `AGENTLINK_TAX_MCP_PYTHONPATH`(또는 `PYTHONPATH`)를 소스 트리로 지정하세요.
+도메인 휠과 같은 승인된 릴리스의 레지스트리 아티팩트가 모두 필요합니다. 휠은 레지스트리를 포함하지 않으므로 `AGENTLINK_TAX_REGISTRY`를 해당 아티팩트 디렉터리로 지정하세요. 휠·레지스트리 설치, MCP 클라이언트 설정, 상태 확인과 실통합 시험은 [세무 전용 설정 안내](docs/TAX_ONLY_SETUP.md)를 참고하세요. 기본 시작은 세무 도메인 도구를 검증하지만 세무 도메인이 없거나 계약이 다르면 상태 도구만 표시합니다.
 
 도구 (모두 읽기 전용): `tax_list_workflows`, `tax_get_workflow_contract`, `tax_plan_work`, `tax_get_automation_offer`, `tax_list_rule_cards`, `tax_search_law`, `tax_check_business_status`, `tax_list_practice_cards`, `tax_list_holidays`, `tax_get_schedule`, `tax_find_office`, `tax_search_interpretations`, `tax_get_tribunal_decision`, `tax_search_forms`, `tax_list_form_guides`, `tax_get_form_field_tips`. `tax_plan_work`는 선택 인자 `include_evidence`(서식 원본·근거 후보 첨부)와 `include_filling_guide`(작성 안내 초안 첨부)를 받습니다. 성공 결과는 도메인 서버의 `structuredContent`를 그대로 반환하며(오류 결과의 원문은 전달하지 않고 고정된 안전한 메시지의 `TAX_DOMAIN_TOOL_ERROR`로 대체), 초안일 뿐 적용 여부는 판단되지 않고 세액은 계산하지 않습니다. 호출 제한시간은 30초이며, 실패 시 `tax-bridge-error.v1` (`TAX_DOMAIN_UNAVAILABLE` / `TAX_DOMAIN_TIMEOUT` / `TAX_DOMAIN_TOOL_ERROR` / `TAX_DOMAIN_ERROR`)을 반환합니다.
 
@@ -110,22 +111,13 @@ npm run dev
 ## Architecture
 
 ```
-agentlink-mcp-server (Public - this repo)
+agentlink-mcp-server
 ├── MCP tool definitions & schemas
 ├── Transport layer (stdio / HTTP)
-└── DataProvider interface
+└── Optional installed domain MCP servers
         │
         ▼
-agentlink-core-engine (Private)
-├── Data crawling & aggregation
-├── Data normalization pipeline
-└── Source-specific adapters
-        │
-        ▼
-agentlink-billing-x402 (Private)
-├── x402 micropayment processing
-├── Usage metering
-└── Wallet management
+Verified tool contracts are required before domain tools are advertised.
 ```
 
 ## Contributing
