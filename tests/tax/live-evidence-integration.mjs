@@ -56,7 +56,7 @@ function kstDate(value = new Date()) {
 }
 
 const CALCULATION_VALUE_FIELDS = [
-  "expense_rate", "expense_amount", "income_amount", "tax_base", "national_rate", "national_tax",
+  "expense_rate", "expense_amount", "income_amount", "expense_excess_amount", "tax_base", "national_rate", "national_tax",
   "local_rate", "local_tax", "total_withholding", "net_payment",
 ];
 
@@ -138,6 +138,16 @@ function assertTypedPaymentAssessments(answer, expected) {
         assessment.notices.includes("actual_expense_scope_confirmation=user_supplied_unverified"),
       `${expected.paymentId} must label actual expenses and keep the scope assertion unverified`);
     }
+  if (expected.lossScope) {
+    const lossNotices = ["loss_scope=per_payment_only", "annual_other_income_netting=not_computed",
+      "other_income_offset=not_computed", "loss_carryforward=not_computed", "refund=not_computed"];
+    for (const assessment of matching) {
+      for (const notice of lossNotices) {
+        must(assessment.notices.includes(notice),
+          `${expected.paymentId} practitioner assessment must include ${notice}`);
+      }
+    }
+  }
   }
 }
 
@@ -177,8 +187,16 @@ function assertPractitionerCalculationSection(answer, expected) {
     must(lines.some((line) => line.includes(String(expected.values.expense_amount)) && line.includes("실제")),
       `${expected.paymentId} practitioner calculation section must show the supplied actual expense total`);
     includes("사용자 확인 실제 필요경비 범위(미검증): true");
-    includes(`기타소득금액: ${expected.values.gross_amount} − ${expected.values.expense_amount} = ${expected.values.income_amount}원`);
-    includes(`과세표준(1원 미만 절사): ${expected.values.tax_base}원`);
+    if (expected.lossScope) {
+      includes(`지급 건별 기타소득 차액(연간 소득금액 아님): ${expected.values.gross_amount} − ${expected.values.expense_amount} = ${expected.values.income_amount}원`);
+      must(lines.some((line) => line.startsWith("지급액 초과 필요경비:") &&
+        line.includes(String(expected.expenseExcessAmount))),
+      `${expected.paymentId} practitioner section must report the positive expense excess`);
+      includes(`원천징수 계산용 과세표준: ${expected.values.tax_base}원`);
+    } else {
+      includes(`기타소득금액: ${expected.values.gross_amount} − ${expected.values.expense_amount} = ${expected.values.income_amount}원`);
+      includes(`과세표준(1원 미만 절사): ${expected.values.tax_base}원`);
+    }
   } else if (expected.values.expense_rate !== null && expected.values.expense_rate !== undefined) {
     includes(`표준 필요경비: ${expected.values.gross_amount} × ${expected.values.expense_rate} = ${expected.values.expense_amount}원`);
     const incomeLabel = expected.profile === "other_lecture" || expected.profile === "other_personal_service"
@@ -236,6 +254,18 @@ function assertComputedRow(result, paymentId, expected) {
   same(row.applicability_status, expected.applicability, `${paymentId} applicability must match the expected scope`);
   for (const [field, value] of Object.entries(expected.values)) {
     same(row[field], value, `${paymentId}.${field} must match the independent expected result`);
+  }
+  const otherProfile = expected.profile === "other_lecture" || expected.profile === "other_personal_service";
+  const expectedExpenseExcess = expected.expenseExcessAmount ?? (otherProfile ? "0" : null);
+  same(row.expense_excess_amount, expectedExpenseExcess,
+    `${paymentId}.expense_excess_amount must remain an unsigned amount or null outside OTHER calculations`);
+  if (expected.lossScope) {
+    must(row.reason_codes.includes("below_taxable_minimum") &&
+      row.reason_codes.includes("actual_expenses_exceed_gross"),
+    `${paymentId} loss row must carry the below-minimum and excess-expense reason markers`);
+  } else {
+    must(!row.reason_codes.includes("actual_expenses_exceed_gross"),
+      `${paymentId} must not be marked as an above-gross expense row`);
   }
   must(typeof row.formula === "string" && row.formula.length > 0, `${paymentId} must explain its formula`);
   same(row.rounding, "truncate_national_tax_to_10_won_then_local_tax_to_10_won",
@@ -325,7 +355,6 @@ const OTHER_REQUIRED_BASIS = [
     semantics: [{ locator: "제37조 제2항", pattern: /총수입금액에\s*대응하는\s*비용으로서\s*일반적으로\s*용인되는\s*통상적인\s*것의\s*합계액을\s*필요경비에\s*산입/u }] },
   { rule_id: "WH-CALC-OTHER-EXPENSE", law_id: "003956", article: "제87조", locator: "제87조 제1호의2",
     semantics: [{ locator: "제87조 제1호의2", pattern: /(?=.*법\s*제21조제1항.*제15호\s*및\s*제19호의\s*기타소득)(?=.*거주자가\s*받은\s*금액의\s*100\s*분의\s*60에\s*상당하는\s*금액을\s*필요경비로\s*한다)(?=.*다만.*실제\s*소요된\s*필요경비가\s*거주자가\s*받은\s*금액의\s*100\s*분의\s*60에\s*상당하는\s*금액을\s*초과하면.*그\s*초과하는\s*금액도\s*필요경비에\s*산입)/u }] },
-  ...SHARED_REQUIRED_BASIS,
 ];
 
 const OTHER_ACTUAL_EXPENSE_BASIS = [
@@ -340,6 +369,17 @@ const OTHER_ACTUAL_EXPENSE_BASIS = [
   { rule_id: "WH-CALC-OTHER-ACTUAL-WITHHOLDING", law_id: "003956", article: "제202조",
     locator: "제202조 제1항", semantics: [{ locator: "제202조 제1항",
       pattern: /(?=.*지급금액에서\s*이에\s*대응하는\s*필요경비)(?=.*원천징수의무자가\s*확인할\s*수\s*있는\s*금액)(?=.*제87조의\s*규정에\s*의한\s*필요경비)/u }] },
+];
+
+const OTHER_LOSS_SCOPE_BASIS = [
+  { rule_id: "WH-CALC-OTHER-LOSS-SCOPE", law_id: "001565", article: "제21조",
+    locator: "제21조 제3항", semantics: [{ locator: "제21조 제3항",
+      pattern: /기타소득금액은\s*해당\s*과세기간의\s*총수입금액에서\s*이에\s*사용된\s*필요경비를\s*공제한\s*금액/u }] },
+  { rule_id: "WH-CALC-OTHER-LOSS-SCOPE", law_id: "001565", article: "제45조",
+    locator: "제45조 제1항·제3항", semantics: [
+      { locator: "제45조 제1항", pattern: /사업자가\s*비치[ㆍ·]기록한\s*장부에\s*의하여.*사업소득금액을\s*계산할\s*때\s*발생한\s*결손금.*종합소득과세표준.*기타소득금액.*에서\s*순서대로\s*공제/u },
+      { locator: "제45조 제3항", pattern: /부동산임대업에서\s*발생한\s*결손금.*제1항 및 제2항 단서에 따라 공제하고 남은 결손금.*이월결손금.*15년.*소득금액을\s*계산할\s*때/u },
+    ] },
 ];
 
 const OTHER_PERSONAL_SERVICE_MAIN_BASIS = [
@@ -422,11 +462,43 @@ const INSTRUMENT_BY_LAW_ID = {
   "012678": "local-accounting-decree",
 };
 
-function specsForProfile(profile, serviceSubtype, otherServiceSubtype, expenseMethod = "standard_60") {
+function decimalParts(value) {
+  const text = typeof value === "number" && Number.isFinite(value)
+    ? String(value) : typeof value === "string" ? value : "";
+  const match = /^(0|[1-9]\d*)(?:\.(\d+))?$/u.exec(text);
+  if (!match) return null;
+  const fraction = match[2] ?? "";
+  return { coefficient: BigInt(`${match[1]}${fraction}`), scale: fraction.length };
+}
+
+function decimalGreaterThan(left, right) {
+  const a = decimalParts(left);
+  const b = decimalParts(right);
+  if (!a || !b) return false;
+  const scale = Math.max(a.scale, b.scale);
+  return a.coefficient * 10n ** BigInt(scale - a.scale) >
+    b.coefficient * 10n ** BigInt(scale - b.scale);
+}
+
+function expectsOtherLossScope(paymentInput) {
+  if (!paymentInput || !["other_lecture", "other_personal_service"].includes(paymentInput.withholding_profile) ||
+      paymentInput.expenses_exceed_standard !== true || paymentInput.actual_expense_amount === undefined ||
+      paymentInput.actual_expense_amount === null || paymentInput.gross_amount === undefined ||
+      paymentInput.gross_amount === null) return false;
+  if (paymentInput.withholding_profile === "other_personal_service" &&
+      !Object.hasOwn(OTHER_PERSONAL_SERVICE_SUBTYPES, paymentInput.other_service_subtype)) return false;
+  return decimalGreaterThan(paymentInput.actual_expense_amount, paymentInput.gross_amount);
+}
+
+function specsForProfile(profile, serviceSubtype, otherServiceSubtype,
+                         expenseMethod = "standard_60", lossScopeExpected = false) {
   if (profile === "business_lecture") return BUSINESS_REQUIRED_BASIS;
-  if (profile === "other_lecture") return expenseMethod === "actual"
-    ? [...OTHER_REQUIRED_BASIS, ...OTHER_ACTUAL_EXPENSE_BASIS]
-    : OTHER_REQUIRED_BASIS;
+  if (profile === "other_lecture") return [
+    ...OTHER_REQUIRED_BASIS,
+    ...(expenseMethod === "actual" ? OTHER_ACTUAL_EXPENSE_BASIS : []),
+    ...(lossScopeExpected ? OTHER_LOSS_SCOPE_BASIS : []),
+    ...SHARED_REQUIRED_BASIS,
+  ];
   if (profile === "business_personal_service") {
     const selected = PERSONAL_SERVICE_SUBTYPES[serviceSubtype];
     if (!selected) throw new AcceptanceFailure("A supported personal-service subtype is required for a basis assertion");
@@ -439,7 +511,8 @@ function specsForProfile(profile, serviceSubtype, otherServiceSubtype, expenseMe
       throw new AcceptanceFailure("A supported other-personal-service subtype is required for a basis assertion");
     }
     return [...OTHER_PERSONAL_SERVICE_MAIN_BASIS, scopeBasis, ...OTHER_REQUIRED_BASIS.slice(6),
-      ...(expenseMethod === "actual" ? OTHER_ACTUAL_EXPENSE_BASIS : [])];
+      ...(expenseMethod === "actual" ? OTHER_ACTUAL_EXPENSE_BASIS : []),
+      ...(lossScopeExpected ? OTHER_LOSS_SCOPE_BASIS : []), ...SHARED_REQUIRED_BASIS];
   }
   throw new AcceptanceFailure("A supported withholding profile is required for a basis assertion");
 }
@@ -447,6 +520,33 @@ function specsForProfile(profile, serviceSubtype, otherServiceSubtype, expenseMe
 function basisKey(row) {
   return [row.rule_id, row.law_id, row.article, row.locator].join("|");
 }
+
+test("loss-scope basis selection requires trusted positive-excess input facts", () => {
+  const lossInput = {
+    withholding_profile: "other_lecture", expenses_exceed_standard: true,
+    actual_expense_amount: 1_200_000, gross_amount: 1_000_000,
+  };
+  must(expectsOtherLossScope(lossInput), "A supported actual OTHER input above gross must select loss-scope evidence");
+  const selected = specsForProfile("other_lecture", undefined, undefined, "actual",
+    expectsOtherLossScope(lossInput));
+  same(selected.filter((spec) => spec.rule_id === "WH-CALC-OTHER-LOSS-SCOPE").length, 2,
+    "The conditional loss card must require both Article 21(3) and Article 45(1),(3)");
+  const missingScope = { ...lossInput, actual_expense_scope_confirmed: undefined };
+  must(expectsOtherLossScope(missingScope),
+    "Known positive excess selects its evidence even while scope confirmation is missing");
+  const noLossInput = { ...lossInput, actual_expense_amount: 700_000,
+    income_amount: "-200000", expense_excess_amount: "200000" };
+  must(!expectsOtherLossScope(noLossInput),
+    "A signed or excess-looking output value must not select evidence when trusted input is nonloss");
+  must(!expectsOtherLossScope({ ...lossInput, expenses_exceed_standard: false }),
+    "An unselected actual-expense method must not select loss-scope evidence");
+  must(!expectsOtherLossScope({ ...lossInput, actual_expense_amount: undefined }),
+    "A missing trusted actual-expense amount must not select loss-scope evidence");
+  must(!expectsOtherLossScope({ ...lossInput, gross_amount: undefined }),
+    "A missing trusted gross amount must not select loss-scope evidence");
+  must(!expectsOtherLossScope({ ...lossInput, withholding_profile: "business_lecture" }),
+    "Business profiles must not select OTHER loss-scope evidence");
+});
 
 const CIRCLED_NUMBERS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩",
   "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳"];
@@ -729,7 +829,56 @@ test("clause locator parser isolates actual-expense scope, exclusions, payer asc
     "The Article 87 actual-excess proviso must not be inferred from the 60% standard alone");
 });
 
-test("clause locator parser matches sanitized current official Articles 21, 33, 37, Decree 87 and Article 202 probes when configured", {
+test("clause locator parser separates annual OTHER income from business-origin loss rules", () => {
+  const article21 = [
+    "① 기타소득은 다음 각 호의 소득으로 한다.",
+    "② 제1항에도 불구하고 서화·골동품 양도소득은 별도로 규정한다.",
+    "③ 기타소득금액은 해당 과세기간의 총수입금액에서 이에 사용된 필요경비를 공제한 금액으로 한다.",
+  ].join("\n");
+  const article45 = [
+    "① 사업자가 비치·기록한 장부에 의하여 해당 과세기간의 사업소득금액을 계산할 때 발생한 결손금은 종합소득과세표준을 계산할 때 기타소득금액에서 순서대로 공제한다.",
+    "② 부동산임대업에서 발생한 결손금은 주거용 건물 임대업 외에는 공제하지 아니한다.",
+    "③ 부동산임대업에서 발생한 결손금과 제1항 및 제2항 단서에 따라 공제하고 남은 결손금(이하 이월결손금이라 한다)은 15년 이내에 끝나는 과세기간의 소득금액을 계산할 때 다음 각 호에 따라 공제한다.",
+    "1. 제1항 및 제2항 단서에 따라 공제하고 남은 이월결손금은 사업소득금액, 근로소득금액, 연금소득금액, 기타소득금액, 이자소득금액 및 배당소득금액에서 순서대로 공제한다.",
+    "2. 부동산임대업에서 발생한 이월결손금은 부동산임대업의 소득금액에서 공제한다.",
+    "④ 추계신고를 한 경우에는 제3항을 적용하지 아니한다.",
+  ].join("\n");
+  assertClauseSemantics(article21, OTHER_LOSS_SCOPE_BASIS[0]);
+  assertClauseSemantics(article45, OTHER_LOSS_SCOPE_BASIS[1]);
+  const annualOther = locatorSegments(article21, "제21조 제3항").join(" ");
+  must(/해당\s*과세기간의\s*총수입금액.*필요경비/u.test(annualOther) &&
+    !/서화/u.test(annualOther),
+  "The annual OTHER-income formula must be isolated to paragraph 3, not paragraph 2");
+  const businessLoss = locatorSegments(article45, "제45조 제1항").join(" ");
+  const carriedLoss = locatorSegments(article45, "제45조 제3항").join(" ");
+  must(/사업자가\s*비치[ㆍ·]기록한\s*장부/u.test(businessLoss) &&
+    /사업소득금액.*발생한\s*결손금/u.test(businessLoss) &&
+    /기타소득금액에서/u.test(businessLoss),
+  "Article 45 paragraph 1 must identify a business-origin loss and its annual deduction destination");
+  const carriedLossText = carriedLoss.replace(/\s+/gu, " ");
+  must(/제1항 및 제2항 단서에 따라 공제하고 남은 결손금/u.test(carriedLossText) &&
+    /이월결손금.*15년/u.test(carriedLossText) &&
+    /1\..*기타소득금액.*에서 순서대로 공제/u.test(carriedLossText) &&
+    /2\..*부동산임대업의 소득금액에서 공제/u.test(carriedLossText) &&
+    !/추계신고/u.test(carriedLossText),
+  "Article 45 paragraph 3 must preserve both carry-deduction branches and exclude paragraph 4");
+
+  const reject = (text, spec, message) => {
+    let rejected = false;
+    try { assertClauseSemantics(text, spec); }
+    catch (error) { rejected = error instanceof AcceptanceFailure; }
+    must(rejected, message);
+  };
+  reject(article21.replace(/③[^\n]*/u, "③ 별도 세율을 적용한다."), OTHER_LOSS_SCOPE_BASIS[0],
+    "The annual OTHER formula must not be inferred from Article 21 paragraph 2");
+  const wrongArticle45 = article45
+    .replace(/①[^\n]*/u, "① 사업소득과 기타소득은 별도 절차를 따른다.")
+    .replace(/③[^\n]*/u, "③ 이월결손금은 별도 절차를 따른다.");
+  reject(wrongArticle45, OTHER_LOSS_SCOPE_BASIS[1],
+    "Article 45 paragraphs 2 or 4 cannot substitute for the business-origin loss clauses in paragraphs 1 and 3");
+});
+
+test("clause locator parser matches sanitized current official Articles 21, 33, 37, 45, Decree 87 and Article 202 probes when configured", {
   skip: !process.env.AGENTLINK_TEST_TAX_OFFICIAL_PROBE_DIR,
 }, () => {
   const directory = process.env.AGENTLINK_TEST_TAX_OFFICIAL_PROBE_DIR;
@@ -737,18 +886,21 @@ test("clause locator parser matches sanitized current official Articles 21, 33, 
   const article21Path = files.find((name) => name.endsWith("소득세법_제21조.json"));
   const article33Path = files.find((name) => name.endsWith("소득세법_제33조.json"));
   const article37Path = files.find((name) => name.endsWith("소득세법_제37조.json"));
+  const article45Path = files.find((name) => name.endsWith("소득세법_제45조.json"));
   const decree87Path = files.find((name) => name.endsWith("소득세법 시행령_제87조.json"));
   const decree202Path = files.find((name) => name.endsWith("소득세법 시행령_제202조.json"));
-  must(article21Path && article33Path && article37Path && decree87Path && decree202Path,
+  must(article21Path && article33Path && article37Path && article45Path && decree87Path && decree202Path,
     "Configured sanitized official probe must include the current income-tax expense and withholding clauses");
   const article21 = JSON.parse(readFileSync(join(directory, article21Path), "utf8"));
   const article33 = JSON.parse(readFileSync(join(directory, article33Path), "utf8"));
   const article37 = JSON.parse(readFileSync(join(directory, article37Path), "utf8"));
+  const article45 = JSON.parse(readFileSync(join(directory, article45Path), "utf8"));
   const decree87 = JSON.parse(readFileSync(join(directory, decree87Path), "utf8"));
   const decree202 = JSON.parse(readFileSync(join(directory, decree202Path), "utf8"));
   for (const [document, lawId, label] of [
     [article21, "001565", "Article 21"], [article33, "001565", "Article 33"],
-    [article37, "001565", "Article 37"], [decree87, "003956", "Decree 87"],
+    [article37, "001565", "Article 37"], [article45, "001565", "Article 45"],
+    [decree87, "003956", "Decree 87"],
     [decree202, "003956", "Decree 202"],
   ]) {
     same(document.law_id, lawId, `Sanitized ${label} probe must retain its law identity`);
@@ -761,6 +913,9 @@ test("clause locator parser matches sanitized current official Articles 21, 33, 
   }
   const article21Calculation = OTHER_PERSONAL_SERVICE_MAIN_BASIS[0];
   assertClauseSemantics(article21.article.text, article21Calculation);
+  for (const spec of OTHER_LOSS_SCOPE_BASIS) {
+    assertClauseSemantics(spec.article === "제21조" ? article21.article.text : article45.article.text, spec);
+  }
   const expenseSpec = OTHER_REQUIRED_BASIS.find((spec) => spec.rule_id === "WH-CALC-OTHER-EXPENSE");
   assertClauseSemantics(decree87.article.text, expenseSpec);
   for (const spec of OTHER_ACTUAL_EXPENSE_BASIS.filter((item) => item.article === "제37조")) {
@@ -774,19 +929,30 @@ test("clause locator parser matches sanitized current official Articles 21, 33, 
   }
 });
 
-function assertMatchedBasis(result, paymentDate, expectedProfile) {
+function assertMatchedBasis(result, paymentDate, expectedProfile, trustedPayments) {
   const evidence = result.legal_evidence ?? [];
   const calculated = (result.withholding_calculations ?? []).filter((row) => row.status === "computed");
   must(calculated.length > 0, "Matched-basis check needs at least one computed payment");
+  const inputs = new Map((trustedPayments ?? []).map((item) => [item.payment_id, item]));
   for (const row of calculated) {
-    same(row.profile, expectedProfile, `${row.payment_id} must retain the selected basis profile`);
-    const expectedSubtype = expectedProfile === "business_personal_service" ? row.service_subtype : undefined;
-    const expectedOtherSubtype = expectedProfile === "other_personal_service" ? row.other_service_subtype : undefined;
-    const selectedMethod = row.expense_method ?? null;
-    same(selectedMethod, expectedProfile === "other_lecture" || expectedProfile === "other_personal_service"
-      ? selectedMethod === "actual" ? "actual" : "standard_60"
-      : null, `${row.payment_id} must expose a supported expense method for its selected profile`);
-    const expectedSpecs = specsForProfile(expectedProfile, expectedSubtype, expectedOtherSubtype, selectedMethod);
+    const input = inputs.get(row.payment_id);
+    must(input, `${row.payment_id} must have a trusted input row for basis selection`);
+    same(input.withholding_profile, expectedProfile,
+      `${row.payment_id} trusted input must use the expected basis profile`);
+    same(row.profile, input.withholding_profile, `${row.payment_id} must retain the selected basis profile`);
+    const expectedSubtype = expectedProfile === "business_personal_service" ? input.service_subtype : undefined;
+    const expectedOtherSubtype = expectedProfile === "other_personal_service" ? input.other_service_subtype : undefined;
+    if (expectedSubtype !== undefined) same(row.service_subtype, expectedSubtype,
+      `${row.payment_id} must echo the trusted service subtype`);
+    if (expectedOtherSubtype !== undefined) same(row.other_service_subtype, expectedOtherSubtype,
+      `${row.payment_id} must echo the trusted other-service subtype`);
+    const selectedMethod = expectedProfile === "other_lecture" || expectedProfile === "other_personal_service"
+      ? input.expenses_exceed_standard === true ? "actual" : "standard_60" : null;
+    same(row.expense_method ?? null, selectedMethod,
+      `${row.payment_id} must expose the expense method selected by trusted input facts`);
+    const lossScopeExpected = expectsOtherLossScope(input);
+    const expectedSpecs = specsForProfile(expectedProfile, expectedSubtype, expectedOtherSubtype,
+      selectedMethod ?? "standard_60", lossScopeExpected);
     const expectedBasisKeys = new Set(expectedSpecs.map(basisKey));
     const expectedRuleIds = [...new Set(expectedSpecs.map((spec) => spec.rule_id))].sort();
     const rowRuleIds = [...new Set(row.rule_ids ?? [])].sort();
@@ -961,7 +1127,8 @@ function retryableCalculationBudgetFailure(result, paymentIds, expectedSelection
     if (!expected || row.profile !== expected.profile || row.expense_method !== expected.expenseMethod ||
       (expected.serviceSubtype !== undefined && row.service_subtype !== expected.serviceSubtype) ||
       (expected.otherServiceSubtype !== undefined && row.other_service_subtype !== expected.otherServiceSubtype)) return false;
-    const specs = specsForProfile(row.profile, row.service_subtype, row.other_service_subtype, expected.expenseMethod);
+    const specs = specsForProfile(expected.profile, expected.serviceSubtype, expected.otherServiceSubtype,
+      expected.expenseMethod ?? "standard_60", expected.lossScopeExpected);
     const expectedKeys = new Set(specs.map(basisKey));
     const checks = row.basis_checks ?? [];
     const checkKeys = new Set(checks.map(basisKey));
@@ -1002,6 +1169,7 @@ async function planWithBoundedBudgetRetries(call, matterValue, retryBudget, paym
       expenseMethod: item.withholding_profile === "other_lecture" || item.withholding_profile === "other_personal_service"
         ? item.expenses_exceed_standard === true ? "actual" : item.expenses_exceed_standard === false ? "standard_60" : null
         : null,
+      lossScopeExpected: expectsOtherLossScope(item),
     }]));
   if (expectedSelections.size !== paymentIds.length) {
     throw new AcceptanceFailure("Retry gate requires a known selected profile for every payment");
@@ -1097,15 +1265,18 @@ other_personal_service_rule_ids = sorted(str(row.get("id", "")) for row in rule_
         "WH-CALC-OTHER-ADVISORY", "WH-CALC-OTHER-BROADCAST"})
 actual_expense_rule_ids = sorted(str(row.get("id", "")) for row in rule_rows
     if str(row.get("id", "")) in {"WH-CALC-OTHER-ACTUAL-SCOPE", "WH-CALC-OTHER-ACTUAL-WITHHOLDING"})
+loss_scope_rule_ids = sorted(str(row.get("id", "")) for row in rule_rows
+    if str(row.get("id", "")) == "WH-CALC-OTHER-LOSS-SCOPE")
 print(json.dumps({
     "package_installed": package.is_relative_to(site_packages),
     "registry_bundled": registry.is_relative_to(package) and required_assets <= assets,
-    "calculation_rules_bundled": withholding_rules.is_file() and calculation_rule_count == 21 and
+    "calculation_rules_bundled": withholding_rules.is_file() and calculation_rule_count == 22 and
         personal_service_rule_ids == ["WH-CALC-PERSONAL-CREATIVE", "WH-CALC-PERSONAL-ENTERTAINMENT",
             "WH-CALC-PERSONAL-LANGUAGE"] and
         other_personal_service_rule_ids == ["WH-CALC-OTHER-ADVISORY", "WH-CALC-OTHER-BROADCAST",
             "WH-CALC-OTHER-MANUSCRIPT", "WH-CALC-OTHER-SERVICE"] and
         actual_expense_rule_ids == ["WH-CALC-OTHER-ACTUAL-SCOPE", "WH-CALC-OTHER-ACTUAL-WITHHOLDING"] and
+        loss_scope_rule_ids == ["WH-CALC-OTHER-LOSS-SCOPE"] and
         any(str(row.get("id", "")) == "WH-CALC-OTHER-EXPENSE" for row in rule_rows) and
         "business_lecture" in withholding_workflow.get("description", "") and
         "other_lecture" in withholding_workflow.get("description", "") and
@@ -1130,7 +1301,7 @@ print(json.dumps({
   same(facts.package_installed, true, "Tax package must import from installed site-packages");
   same(facts.registry_bundled, true, "Canonical JSON registry must be bundled with the installed package");
   same(facts.calculation_rules_bundled, true,
-    "All supported lecture, personal-service, other-personal-service, and actual-expense rule cards must be bundled with the installed package");
+    "All supported lecture, personal-service, other-personal-service, actual-expense, and conditional loss-scope rule cards must be bundled with the installed package");
   same(facts.editable, false, "Installed tax package must not be editable");
   same(facts.credential_present, true, "Existing law.go.kr credential must be available to the installed child");
 }
@@ -1334,6 +1505,33 @@ test("installed wheel returns current law and opted-in withholding evidence thro
       ];
       const actualExpenseMatter = calculationMatter(actualExpensePayments, calculationDate,
         "live-other-actual-expenses");
+      const lossPayments = [
+        actualExpensePayment("other_lecture", undefined, 1000000, 1200000,
+          "loss-other-lecture", calculationDate, "0"),
+        actualExpensePayment("other_personal_service", "manuscript_fee", 1000000, 1200000,
+          "loss-other-manuscript", calculationDate, "66000"),
+        actualExpensePayment("other_personal_service", "expert_advisory", 1000000, 1200000,
+          "loss-other-advisory", calculationDate),
+        actualExpensePayment("other_personal_service", "broadcast_commentary", 1000000, 1200000,
+          "loss-other-broadcast", calculationDate),
+        actualExpensePayment("other_lecture", undefined, 1000000, 1000001,
+          "loss-one-won-excess", calculationDate),
+        actualExpensePayment("other_personal_service", "manuscript_fee", 0, 1,
+          "loss-zero-gross", calculationDate),
+        actualExpensePayment("other_personal_service", "broadcast_commentary", 1000123, 1000124,
+          "loss-odd-gross", calculationDate),
+      ];
+      const lossMatter = calculationMatter(lossPayments, calculationDate, "live-other-loss-scope");
+      const isolationMissingScope = actualExpensePayment("other_personal_service", "manuscript_fee",
+        1000000, 1200000, "isolation-missing-scope", calculationDate);
+      delete isolationMissingScope.actual_expense_scope_confirmed;
+      const paymentIsolationPayments = [
+        { ...lossPayments[0], payment_id: "isolation-loss-a", withheld_amount: "0" },
+        { ...actualExpensePayments[0], payment_id: "isolation-nonloss-b", withheld_amount: "66000" },
+        isolationMissingScope,
+      ];
+      const paymentIsolationMatter = calculationMatter(paymentIsolationPayments, calculationDate,
+        "live-other-payment-isolation");
       const personalServicePayments = Object.keys(PERSONAL_SERVICE_SUBTYPES).map((serviceSubtype) =>
         personalServicePayment(serviceSubtype, 1000000, `personal-${serviceSubtype}`, calculationDate));
       personalServicePayments.push(personalServicePayment("translation", 33333,
@@ -1355,6 +1553,10 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         otherPersonalPayments.map((item) => item.payment_id));
       const actualExpensePlan = await planWithBoundedBudgetRetries(call, actualExpenseMatter, retryBudget,
         actualExpensePayments.map((item) => item.payment_id));
+      const lossPlan = await planWithBoundedBudgetRetries(call, lossMatter, retryBudget,
+        lossPayments.map((item) => item.payment_id));
+      const paymentIsolationPlan = await planWithBoundedBudgetRetries(call, paymentIsolationMatter, retryBudget,
+        paymentIsolationPayments.map((item) => item.payment_id));
       const actualExpensePractitionerAnswers = {};
       for (const [label, paymentId] of [
         ["lecture", "other-actual-lecture-1000000"],
@@ -1368,6 +1570,19 @@ test("installed wheel returns current law and opted-in withholding evidence thro
           include_evidence: true,
         });
       }
+      const lossPractitionerAnswers = {};
+      for (const [label, paymentId] of [["lecture", "loss-other-lecture"], ["manuscript", "loss-other-manuscript"]]) {
+        const payment = lossPayments.find((item) => item.payment_id === paymentId);
+        must(payment, `Loss practitioner scenario is missing ${paymentId}`);
+        lossPractitionerAnswers[label] = await call("tax_answer_practitioner_question", {
+          matter: calculationMatter([payment], calculationDate, `live-loss-practitioner-${paymentId}`),
+          include_evidence: true,
+        });
+      }
+      const paymentIsolationAnswer = await call("tax_answer_practitioner_question", {
+        matter: calculationMatter(paymentIsolationPayments.slice(0, 2), calculationDate,
+          "live-other-payment-isolation-practitioner"), include_evidence: true,
+      });
       const personalServicePlan = await planWithBoundedBudgetRetries(call, personalServiceMatter, retryBudget,
         [...personalServicePayments.map((item) => item.payment_id)]);
       const personalBoundaryPlan = await planWithBoundedBudgetRetries(call, personalBoundaryMatter, retryBudget,
@@ -1423,7 +1638,7 @@ test("installed wheel returns current law and opted-in withholding evidence thro
       must(/0\.03|3\s*%|3\s*퍼센트/u.test(business33333.formula) &&
         /0\.1|10\s*%|10\s*퍼센트/u.test(business33333.formula),
       "Business formula must state the national 3% and local 10% calculations");
-      assertMatchedBasis(businessPlan.result, calculationDate, "business_lecture");
+      assertMatchedBasis(businessPlan.result, calculationDate, "business_lecture", businessMatter.facts.payments);
 
       const personalSubtypeRows = new Map();
       for (const [serviceSubtype, metadata] of Object.entries(PERSONAL_SERVICE_SUBTYPES)) {
@@ -1458,7 +1673,8 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         "translation", "Confirmed facts must preserve the selected subtype");
       same(personalConfirmedPayments.find((item) => item.payment_id === "personal-translation-33333")?.withheld_amount,
         "990", "A supplied actual withholding amount must remain unchanged beside the personal-service calculation");
-      assertMatchedBasis(personalServicePlan.result, calculationDate, "business_personal_service");
+      assertMatchedBasis(personalServicePlan.result, calculationDate, "business_personal_service",
+        personalServiceMatter.facts.payments);
 
       const personalTranslation10000 = assertComputedRow(personalBoundaryPlan.result, "personal-translation-10000", {
         profile: "business_personal_service", serviceSubtype: "translation", applicability: "applies",
@@ -1492,7 +1708,8 @@ test("installed wheel returns current law and opted-in withholding evidence thro
       });
       same(personalTranslation334.withholding_required, true,
         "A positive national amount after won truncation requires withholding");
-      assertMatchedBasis(personalBoundaryPlan.result, calculationDate, "business_personal_service");
+      assertMatchedBasis(personalBoundaryPlan.result, calculationDate, "business_personal_service",
+        personalBoundaryMatter.facts.payments);
 
       const other125000 = assertComputedRow(otherPlan.result, "other-125000", {
         profile: "other_lecture", applicability: "below_taxable_minimum",
@@ -1526,7 +1743,7 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         /0\.2|20\s*%|20\s*퍼센트/u.test(other125001.formula) &&
         /0\.1|10\s*%|10\s*퍼센트/u.test(other125001.formula),
       "Other formula must explain the 60% allowance, 50,000-won threshold, and national/local rates");
-      assertMatchedBasis(otherPlan.result, calculationDate, "other_lecture");
+      assertMatchedBasis(otherPlan.result, calculationDate, "other_lecture", otherMatter.facts.payments);
 
       same(actualExpensePlan.result.calculation_status, "computed",
         "All four supported OTHER profiles and five actual-expense boundary cases must compute");
@@ -1602,10 +1819,101 @@ test("installed wheel returns current law and opted-in withholding evidence thro
       const actualExpenseRowsArray = [...actualExpenseRows.values()];
       assertMatchedBasis({ ...actualExpensePlan.result, withholding_calculations:
         actualExpenseRowsArray.filter((row) => row.profile === "other_lecture") },
-      calculationDate, "other_lecture");
+      calculationDate, "other_lecture", actualExpensePayments);
       assertMatchedBasis({ ...actualExpensePlan.result, withholding_calculations:
         actualExpenseRowsArray.filter((row) => row.profile === "other_personal_service") },
-      calculationDate, "other_personal_service");
+      calculationDate, "other_personal_service", actualExpensePayments);
+
+      same(lossPlan.result.calculation_status, "computed",
+        "All seven above-gross OTHER cases must compute with the complete supported fact and evidence set");
+      equivalent(lossPlan.result.withholding_calculations.map((row) => row.payment_id),
+        lossPayments.map((item) => item.payment_id), "Loss calculation rows must preserve payment input order");
+      const lossExpectations = [
+        { paymentId: "loss-other-lecture", profile: "other_lecture", amount: "1200000", excess: "200000",
+          gross: "1000000", income: "-200000", net: "1000000" },
+        { paymentId: "loss-other-manuscript", profile: "other_personal_service", subtype: "manuscript_fee",
+          amount: "1200000", excess: "200000", gross: "1000000", income: "-200000", net: "1000000" },
+        { paymentId: "loss-other-advisory", profile: "other_personal_service", subtype: "expert_advisory",
+          amount: "1200000", excess: "200000", gross: "1000000", income: "-200000", net: "1000000" },
+        { paymentId: "loss-other-broadcast", profile: "other_personal_service", subtype: "broadcast_commentary",
+          amount: "1200000", excess: "200000", gross: "1000000", income: "-200000", net: "1000000" },
+        { paymentId: "loss-one-won-excess", profile: "other_lecture", amount: "1000001", excess: "1",
+          gross: "1000000", income: "-1", net: "1000000" },
+        { paymentId: "loss-zero-gross", profile: "other_personal_service", subtype: "manuscript_fee",
+          amount: "1", excess: "1", gross: "0", income: "-1", net: "0" },
+        { paymentId: "loss-odd-gross", profile: "other_personal_service", subtype: "broadcast_commentary",
+          amount: "1000124", excess: "1", gross: "1000123", income: "-1", net: "1000123" },
+      ].map((expected) => {
+        const { gross, income, net } = expected;
+        return {
+          ...expected, gross, income, net,
+          values: { gross_amount: gross, expense_rate: null, expense_amount: expected.amount,
+            income_amount: income, tax_base: "0", national_rate: "0.2", national_tax: "0",
+            local_rate: "0.1", local_tax: "0", total_withholding: "0", net_payment: net },
+        };
+      });
+      const lossRows = new Map();
+      for (const expected of lossExpectations) {
+        const row = assertComputedRow(lossPlan.result, expected.paymentId, {
+          profile: expected.profile, otherServiceSubtype: expected.subtype, expenseMethod: "actual",
+          applicability: "below_taxable_minimum", lossScope: true,
+          expenseExcessAmount: expected.excess, values: expected.values,
+        });
+        same(row.withholding_required, false, `${expected.paymentId} must not withhold on a negative payment difference`);
+        equivalent(row.reason_codes, ["below_taxable_minimum", "actual_expenses_exceed_gross"],
+          `${expected.paymentId} must carry the exact below-minimum and positive-excess reasons`);
+        must(row.formula.includes(`${expected.gross} − ${expected.amount} = ${expected.income}원`) &&
+          row.formula.includes(`지급액 초과 필요경비는 ${expected.excess}원`) &&
+          row.formula.includes("비음수 원천징수 계산용 과세표준은 0원") &&
+          row.formula.includes("연간 기타소득 합산·다른 소득 상계·결손금 이월·환급은 계산하지 않습니다"),
+        `${expected.paymentId} formula must preserve signed payment arithmetic and the annual-calculation boundary`);
+        lossRows.set(expected.paymentId, row);
+      }
+      const lossRowsArray = [...lossRows.values()];
+      assertMatchedBasis({ ...lossPlan.result, withholding_calculations:
+        lossRowsArray.filter((row) => row.profile === "other_lecture") },
+      calculationDate, "other_lecture", lossPayments);
+      assertMatchedBasis({ ...lossPlan.result, withholding_calculations:
+        lossRowsArray.filter((row) => row.profile === "other_personal_service") },
+      calculationDate, "other_personal_service", lossPayments);
+
+      same(paymentIsolationPlan.result.calculation_status, "partial",
+        "Mixed computed and missing-fact rows must preserve partial calculation status");
+      same(paymentIsolationPlan.result.status, "needs_facts",
+        "A missing scope assertion must leave the matter waiting for facts");
+      equivalent(paymentIsolationPlan.result.withholding_calculations.map((row) => row.payment_id),
+        paymentIsolationPayments.map((item) => item.payment_id),
+        "Mixed loss and nonloss rows must preserve payment input order");
+      const isolationLoss = assertComputedRow(paymentIsolationPlan.result, "isolation-loss-a", {
+        profile: "other_lecture", expenseMethod: "actual", applicability: "below_taxable_minimum",
+        lossScope: true, expenseExcessAmount: "200000",
+        values: { gross_amount: "1000000", expense_rate: null, expense_amount: "1200000",
+          income_amount: "-200000", tax_base: "0", national_rate: "0.2", national_tax: "0",
+          local_rate: "0.1", local_tax: "0", total_withholding: "0", net_payment: "1000000" },
+      });
+      same(isolationLoss.withholding_required, false, "A loss row must keep its own zero-withholding result");
+      const isolationNonloss = assertComputedRow(paymentIsolationPlan.result, "isolation-nonloss-b", {
+        profile: "other_lecture", expenseMethod: "actual", applicability: "applies",
+        values: { gross_amount: "1000000", expense_rate: null, expense_amount: "700000",
+          income_amount: "300000", tax_base: "300000", national_rate: "0.2", national_tax: "60000",
+          local_rate: "0.1", local_tax: "6000", total_withholding: "66000", net_payment: "934000" },
+      });
+      same(isolationNonloss.withholding_required, true,
+        "The separate positive payment must retain its ordinary withholding result");
+      assertNoCalculatedAmounts(paymentIsolationPlan.result, ["isolation-missing-scope"],
+        "The missing-scope payment must not receive signed or excess amounts");
+      const isolationMissingScopeRow = paymentIsolationPlan.result.withholding_calculations.find((row) =>
+        row.payment_id === "isolation-missing-scope");
+      same(isolationMissingScopeRow.status, "needs_facts",
+        "The above-gross mixed payment must remain blocked until its scope is confirmed");
+      must(isolationMissingScopeRow.missing_facts.includes("actual_expense_scope_confirmed") &&
+        isolationMissingScopeRow.rule_ids.includes("WH-CALC-OTHER-LOSS-SCOPE"),
+      "The mixed missing-scope row must request scope while retaining its conditional loss basis");
+      assertMatchedBasis({ ...paymentIsolationPlan.result, withholding_calculations: [isolationLoss] },
+        calculationDate, "other_lecture", paymentIsolationPayments);
+      assertMatchedBasis({ ...paymentIsolationPlan.result, withholding_calculations: [isolationNonloss] },
+        calculationDate, "other_lecture", paymentIsolationPayments);
+
       for (const expected of [
         { label: "lecture", paymentId: "other-actual-lecture-1000000", profile: "other_lecture",
           national: "60000", local: "6000", total: "66000", net: "934000", actualWithheld: "60000원",
@@ -1647,6 +1955,88 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         assertPractitionerBasisProjection(answer, { ...actualExpensePlan.result,
           withholding_calculations: [row] }, [expected.paymentId]);
       }
+
+      for (const expected of [
+        { label: "lecture", paymentId: "loss-other-lecture", profile: "other_lecture",
+          national: "0", local: "0", total: "0", net: "1000000", actualWithheld: "0원",
+          comparisonOutcome: "comparison_false_candidate", comparisonStatus: "matches_national_tax",
+          expenseExcessAmount: "200000", values: lossExpectations[0].values },
+        { label: "manuscript", paymentId: "loss-other-manuscript", profile: "other_personal_service",
+          otherServiceSubtype: "manuscript_fee", national: "0", local: "0", total: "0", net: "1000000",
+          actualWithheld: "66000원", comparisonOutcome: "comparison_false_candidate",
+          comparisonStatus: "differs_from_national_tax", expenseExcessAmount: "200000",
+          values: lossExpectations[1].values },
+      ]) {
+        const answer = lossPractitionerAnswers[expected.label];
+        same(answer.final_decision, "not_issued", `${expected.paymentId} practitioner answer must remain a draft`);
+        same(answer.applicability, "not_determined", `${expected.paymentId} answer must preserve matter-level applicability`);
+        const row = lossRows.get(expected.paymentId);
+        must(row, `${expected.paymentId} must have a matched negative-income calculation row`);
+        const subtype = expected.otherServiceSubtype ? OTHER_PERSONAL_SERVICE_SUBTYPES[expected.otherServiceSubtype] : null;
+        const practitionerExpected = {
+          ...expected,
+          expenseMethod: "actual",
+          lossScope: true,
+          otherServiceSubtypeLabel: subtype?.label,
+          applicability: "below_taxable_minimum",
+          formula: row.formula,
+          nationalRate: "0.2",
+          localRate: "0.1",
+          nationalExpression: /원천징수 계산용 과세표준\s*0원.*50,000원\s*이하.*→\s*0원/u,
+          localExpression: /10원 단위 절사\(0\s*×\s*0\.1\)/u,
+        };
+        assertTypedPaymentAssessments(answer, practitionerExpected);
+        assertPractitionerCalculationSection(answer, practitionerExpected);
+        assertPractitionerBasisProjection(answer, { ...lossPlan.result, withholding_calculations: [row] },
+          [expected.paymentId]);
+        const sources = answer.perspective_view?.sections?.source_evidence ?? [];
+        for (const article of ["제21조", "제45조"]) {
+          must(sources.some((item) => typeof item.text === "string" && item.text.includes(article) &&
+            item.text.includes("fetched_text_not_compared")),
+          `${expected.paymentId} practitioner source section must retain fetched ${article} evidence`);
+        }
+      }
+
+      same(paymentIsolationAnswer.final_decision, "not_issued",
+        "The mixed-payment practitioner answer must remain a draft");
+      same(paymentIsolationAnswer.applicability, "not_determined",
+        "The mixed-payment answer must preserve matter-level applicability");
+      for (const expected of [
+        { paymentId: "isolation-loss-a", profile: "other_lecture", lossScope: true,
+          expenseExcessAmount: "200000", national: "0", local: "0", total: "0", net: "1000000",
+          actualWithheld: "0원", comparisonOutcome: "comparison_false_candidate",
+          comparisonStatus: "matches_national_tax", applicability: "below_taxable_minimum",
+          values: { gross_amount: "1000000", expense_rate: null, expense_amount: "1200000",
+            income_amount: "-200000", tax_base: "0", national_rate: "0.2", national_tax: "0",
+            local_rate: "0.1", local_tax: "0", total_withholding: "0", net_payment: "1000000" } },
+        { paymentId: "isolation-nonloss-b", profile: "other_lecture", expenseExcessAmount: "0",
+          national: "60000", local: "6000", total: "66000", net: "934000", actualWithheld: "66000원",
+          comparisonOutcome: "comparison_true_candidate", comparisonStatus: "differs_from_national_tax",
+          applicability: "applies",
+          values: { gross_amount: "1000000", expense_rate: null, expense_amount: "700000",
+            income_amount: "300000", tax_base: "300000", national_rate: "0.2", national_tax: "60000",
+            local_rate: "0.1", local_tax: "6000", total_withholding: "66000", net_payment: "934000" } },
+      ]) {
+        const row = paymentIsolationPlan.result.withholding_calculations.find((item) =>
+          item.payment_id === expected.paymentId);
+        must(row, `${expected.paymentId} must have an independent mixed-payment calculation row`);
+        const practitionerExpected = {
+          ...expected,
+          expenseMethod: "actual",
+          formula: row.formula,
+          nationalRate: "0.2",
+          localRate: "0.1",
+          nationalExpression: expected.lossScope
+            ? /원천징수 계산용 과세표준\s*0원.*50,000원\s*이하.*→\s*0원/u
+            : /10원 단위 절사\(300000\s*×\s*0\.2\)/u,
+          localExpression: expected.lossScope
+            ? /10원 단위 절사\(0\s*×\s*0\.1\)/u
+            : /10원 단위 절사\(60000\s*×\s*0\.1\)/u,
+        };
+        assertTypedPaymentAssessments(paymentIsolationAnswer, practitionerExpected);
+        assertPractitionerCalculationSection(paymentIsolationAnswer, practitionerExpected);
+      }
+      assertPractitionerBasisProjection(paymentIsolationAnswer, paymentIsolationPlan.result);
 
       const otherPersonalRows = new Map();
       for (const expected of [
@@ -1699,7 +2089,8 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         "10000", "A supplied actual withholding amount must remain unchanged");
       same(confirmedOtherPayments.find((item) => item.payment_id === "other-service-broadcast-1000000")?.withheld_amount,
         "88000", "A supplied total including local tax must remain unchanged for comparison");
-      assertMatchedBasis(otherPersonalPlan.result, calculationDate, "other_personal_service");
+      assertMatchedBasis(otherPersonalPlan.result, calculationDate, "other_personal_service",
+        otherPersonalMatter.facts.payments);
 
       const noEvidence = await call("tax_plan_work", { matter: businessMatter, include_evidence: false });
       same(noEvidence.calculation_status, "blocked", "Evidence-disabled selected profiles must aggregate as blocked");
@@ -1750,6 +2141,18 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         noEvidenceActualRow.rule_ids.includes("WH-CALC-OTHER-ACTUAL-WITHHOLDING") &&
         noEvidenceActualRow.basis_checks.every((check) => check.status === "not_requested"),
       "Evidence-disabled actual rows must retain both selected actual-expense cards without amounts");
+      const noEvidenceLoss = await call("tax_plan_work", {
+        matter: calculationMatter([lossPayments[0]], calculationDate, "live-no-evidence-loss-scope"),
+        include_evidence: false,
+      });
+      assertNoCalculatedAmounts(noEvidenceLoss, [lossPayments[0].payment_id],
+        "An above-gross actual-expense input must not calculate without matched evidence");
+      const noEvidenceLossRow = noEvidenceLoss.withholding_calculations[0];
+      must(noEvidenceLossRow.rule_ids.includes("WH-CALC-OTHER-ACTUAL-SCOPE") &&
+        noEvidenceLossRow.rule_ids.includes("WH-CALC-OTHER-ACTUAL-WITHHOLDING") &&
+        noEvidenceLossRow.rule_ids.includes("WH-CALC-OTHER-LOSS-SCOPE") &&
+        noEvidenceLossRow.basis_checks.every((check) => check.status === "not_requested"),
+      "Evidence-disabled loss rows must retain all three selected actual and loss-scope cards without amounts");
 
       const actualNegativeResults = [];
       const actualFactCase = async (payment, expectedStatus, expectedReason, label) => {
@@ -1784,8 +2187,10 @@ test("installed wheel returns current law and opted-in withholding evidence thro
       const actualAmountQuestion = actualExpenseQuestions.get(
         "payments[missing-both-actual-expense-facts].actual_expense_amount");
       must(typeof actualAmountQuestion === "string" && /원 단위 정수/u.test(actualAmountQuestion) &&
-        /60% 초과/u.test(actualAmountQuestion) && /총수입금액 이하/u.test(actualAmountQuestion),
-      "The amount question must state whole-won entry and the supported lower and upper bounds");
+        /총수입금액의 60%를 초과/u.test(actualAmountQuestion) &&
+        /총수입금액보다 커도/u.test(actualAmountQuestion) &&
+        /1,000,000,000,000,000원/u.test(actualAmountQuestion),
+      "The amount question must state whole-won entry, the 60% threshold, above-gross support, and the existing ceiling");
       const actualScopeQuestion = actualExpenseQuestions.get(
         "payments[missing-both-actual-expense-facts].actual_expense_scope_confirmed");
       const actualScopeQuestionPatterns = [
@@ -1798,18 +2203,21 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         /소득세·지방소득세/u,
         /벌금·과태료/u,
         /배분/u, /감가상각/u, /한도/u, /시기 조정/u, /중복 공제/u, /환급/u, /제3자 부담액/u,
-        /60% 초과/u, /총수입금액 이하/u, /기타소득 분류 요건/u,
+        /60%를 초과/u, /총수입금액보다 커도/u, /1,000,000,000,000,000원/u, /기타소득 분류 요건/u,
       ];
       must(typeof actualScopeQuestion === "string" && actualScopeQuestionPatterns.every((pattern) =>
         pattern.test(actualScopeQuestion)),
       "The compound scope question must state the current-period, ordinary, ascertainable, exclusion, unresolved-cost, amount-bound, and existing-classification conditions");
       const missingActualScopePayment = actualExpensePayment("other_lecture", undefined, 1000000, 700000,
         "missing-actual-expense-scope", calculationDate);
+      missingActualScopePayment.actual_expense_amount = 1200000;
       delete missingActualScopePayment.actual_expense_scope_confirmed;
       const missingActualScope = await actualFactCase(missingActualScopePayment, "needs_facts",
         "missing_required_facts", "missing-actual-expense-scope");
       must(missingActualScope.row.missing_facts.includes("actual_expense_scope_confirmed"),
         "A missing scope assertion must remain a question");
+      must(missingActualScope.row.rule_ids.includes("WH-CALC-OTHER-LOSS-SCOPE"),
+        "Known above-gross input must select loss-scope evidence even while scope confirmation is missing");
       const missingActualAmountPayment = actualExpensePayment("other_lecture", undefined, 1000000, 700000,
         "missing-actual-expense-amount", calculationDate);
       delete missingActualAmountPayment.actual_expense_amount;
@@ -1819,17 +2227,16 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         "A missing expense total must remain a question");
       const falseActualScopePayment = actualExpensePayment("other_lecture", undefined, 1000000, 700000,
         "false-actual-expense-scope", calculationDate);
+      falseActualScopePayment.actual_expense_amount = 1200000;
       falseActualScopePayment.actual_expense_scope_confirmed = false;
-      await actualFactCase(falseActualScopePayment, "unsupported",
+      const falseActualScope = await actualFactCase(falseActualScopePayment, "unsupported",
         "actual_expense_scope_not_confirmed", "false-actual-expense-scope");
+      must(falseActualScope.row.rule_ids.includes("WH-CALC-OTHER-LOSS-SCOPE"),
+        "Known above-gross input must select loss-scope evidence even while scope confirmation is false");
       const exactStandardExpensePayment = actualExpensePayment("other_lecture", undefined, 1000000, 600000,
         "actual-expense-not-above-standard", calculationDate);
       await actualFactCase(exactStandardExpensePayment, "unsupported",
         "actual_expense_not_above_standard", "actual-expense-not-above-standard");
-      const aboveGrossExpensePayment = actualExpensePayment("other_lecture", undefined, 1000000, 1000001,
-        "actual-expense-over-gross", calculationDate);
-      await actualFactCase(aboveGrossExpensePayment, "unsupported",
-        "actual_expense_exceeds_gross", "actual-expense-over-gross");
       const falseSelectorPayment = actualExpensePayment("other_lecture", undefined, 1000000, 700000,
         "standard-selector-with-actual-facts", calculationDate);
       falseSelectorPayment.expenses_exceed_standard = false;
@@ -2475,6 +2882,10 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         other_personal_service_plan: otherPersonalPlan.result,
         personal_service_plan: personalServicePlan.result, personal_service_boundary_plan: personalBoundaryPlan.result,
         actual_expense_plan: actualExpensePlan.result,
+        loss_calculations: lossPlan.result,
+        loss_answers: lossPractitionerAnswers,
+        payment_isolation: paymentIsolationPlan.result,
+        payment_isolation_answer: paymentIsolationAnswer,
         practitioner_business_answer: lectureAnswer, practitioner_other_answer: otherLectureAnswer,
         practitioner_personal_service_answer: personalServiceAnswer,
         practitioner_other_personal_service_answer: otherPersonalServiceAnswer,
@@ -2483,11 +2894,15 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         practitioner_other_personal_service_broadcast_answer: separateOtherServicePractitionerAnswers.broadcast_commentary,
         practitioner_other_actual_lecture_answer: actualExpensePractitionerAnswers.lecture,
         practitioner_other_actual_service_answer: actualExpensePractitionerAnswers.service,
-        practitioner_other_actual_threshold_answer: actualExpensePractitionerAnswers.threshold });
+        practitioner_other_actual_threshold_answer: actualExpensePractitionerAnswers.threshold,
+        practitioner_other_loss_lecture_answer: lossPractitionerAnswers.lecture,
+        practitioner_other_loss_manuscript_answer: lossPractitionerAnswers.manuscript });
 
       const allLive = JSON.stringify([search, article, withEvidence, answer, businessPlan.result, otherPlan.result,
         otherPersonalPlan.result, actualExpensePlan.result, personalServicePlan.result, personalBoundaryPlan.result,
-        ...Object.values(actualExpensePractitionerAnswers), ...actualNegativeResults, noEvidenceActual, lectureAnswerWithoutEvidence,
+        lossPlan.result, paymentIsolationPlan.result, paymentIsolationAnswer,
+        ...Object.values(actualExpensePractitionerAnswers), ...Object.values(lossPractitionerAnswers),
+        ...actualNegativeResults, noEvidenceActual, noEvidenceLoss, lectureAnswerWithoutEvidence,
         lectureAnswer, otherPersonalServiceAnswerWithoutEvidence, otherPersonalServiceAnswer,
         personalServiceAnswerWithoutEvidence, personalServiceAnswer, noEvidence, unknownProfile, missingFact,
         missingPayeeEntity, otherLectureAnswerWithoutEvidence, otherLectureAnswer, noEvidenceOther,
@@ -2507,6 +2922,9 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         other_personal_service_calculations: otherPersonalPlan.result.withholding_calculations.length,
         actual_expense_calculations: actualExpensePlan.result.withholding_calculations.length,
         actual_expense_practitioner_answers: Object.keys(actualExpensePractitionerAnswers).length,
+        loss_calculations: lossPlan.result.withholding_calculations.length,
+        loss_practitioner_answers: Object.keys(lossPractitionerAnswers).length,
+        payment_isolation_calculations: paymentIsolationPlan.result.withholding_calculations.length,
         personal_service_calculations: personalServicePlan.result.withholding_calculations.length,
         budget_retry_calls: retryBudget.used,
       }) + "\n");
