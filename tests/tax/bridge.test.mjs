@@ -105,8 +105,12 @@ test("lecture and personal-service calculation facts pass through unchanged with
         assert.ok(description(name).includes(locator), `tool description must include ${locator}`);
       }
       for (const phrase of ["original author", "professional knowledge", "analogous broadcasting media",
-        "a one-off payment does not establish that classification", "The user-provided classification remains unverified"]) {
+        "a one-off payment does not establish that classification", "The user-provided classifications remain unverified",
+        "has not inspected or authenticated records"]) {
         assert.ok(description(name).includes(phrase), `tool description must include ${phrase}`);
+      }
+      for (const field of ["actual_expense_amount", "actual_expense_scope_confirmed"]) {
+        assert.ok(description(name).includes(field), `tool description must explain ${field}`);
       }
       for (const subtype of ["authorship", "artwork_design", "illustration", "composition", "voice_acting",
         "entertainment_direction", "entertainment_filming", "proofreading", "translation", "shorthand"]) {
@@ -180,6 +184,17 @@ test("lecture and personal-service calculation facts pass through unchanged with
         lecture_to_many: false,
       }] },
     };
+    const actualExpenseMatter = {
+      ...otherServiceMatter,
+      matter_id: "actual-expense-forwarding",
+      facts: { payments: [{
+        ...otherServiceMatter.facts.payments[0],
+        payment_id: "actual-expense-broadcast-1",
+        expenses_exceed_standard: true,
+        actual_expense_amount: 700000,
+        actual_expense_scope_confirmed: true,
+      }] },
+    };
     await client.callTool({ name: "tax_plan_work", arguments: { matter: lectureMatter, include_evidence: true } });
     await client.callTool({ name: "tax_answer_practitioner_question", arguments: {
       matter: lectureMatter, include_evidence: true,
@@ -192,6 +207,10 @@ test("lecture and personal-service calculation facts pass through unchanged with
     await client.callTool({ name: "tax_answer_practitioner_question", arguments: {
       matter: otherServiceMatter, include_evidence: true,
     } });
+    await client.callTool({ name: "tax_plan_work", arguments: { matter: actualExpenseMatter, include_evidence: true } });
+    await client.callTool({ name: "tax_answer_practitioner_question", arguments: {
+      matter: actualExpenseMatter, include_evidence: true,
+    } });
     assert.deepEqual(calls, [
       ["plan_tax_work", { matter: lectureMatter, include_evidence: true }],
       ["answer_practitioner_question", { matter: lectureMatter, include_evidence: true }],
@@ -199,6 +218,8 @@ test("lecture and personal-service calculation facts pass through unchanged with
       ["answer_practitioner_question", { matter: personalServiceMatter, include_evidence: true }],
       ["plan_tax_work", { matter: otherServiceMatter, include_evidence: true }],
       ["answer_practitioner_question", { matter: otherServiceMatter, include_evidence: true }],
+      ["plan_tax_work", { matter: actualExpenseMatter, include_evidence: true }],
+      ["answer_practitioner_question", { matter: actualExpenseMatter, include_evidence: true }],
     ]);
   } finally {
     await client.close();
