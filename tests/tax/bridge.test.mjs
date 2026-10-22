@@ -97,6 +97,17 @@ test("lecture and personal-service calculation facts pass through unchanged with
       assert.match(description(name), /business_lecture/);
       assert.match(description(name), /other_lecture/);
       assert.match(description(name), /business_personal_service/);
+      assert.match(description(name), /other_personal_service/);
+      for (const subtype of ["manuscript_fee", "expert_advisory", "broadcast_commentary"]) {
+        assert.match(description(name), new RegExp(subtype));
+      }
+      for (const locator of ["Article 21(1)(15)(a)", "Article 21(1)(19)(c)", "Article 21(1)(19)(b)"]) {
+        assert.ok(description(name).includes(locator), `tool description must include ${locator}`);
+      }
+      for (const phrase of ["original author", "professional knowledge", "analogous broadcasting media",
+        "a one-off payment does not establish that classification", "The user-provided classification remains unverified"]) {
+        assert.ok(description(name).includes(phrase), `tool description must include ${phrase}`);
+      }
       for (const subtype of ["authorship", "artwork_design", "illustration", "composition", "voice_acting",
         "entertainment_direction", "entertainment_filming", "proofreading", "translation", "shorthand"]) {
         assert.match(description(name), new RegExp(subtype));
@@ -146,6 +157,29 @@ test("lecture and personal-service calculation facts pass through unchanged with
         expenses_exceed_standard: true,
       }] },
     };
+    const otherServiceMatter = {
+      ...lectureMatter,
+      matter_id: "other-service-forwarding",
+      facts: { payments: [{
+        payment_id: "broadcast-commentary-1",
+        income_type: "other",
+        payee_type: "resident",
+        payee_entity: "individual",
+        payment_date: "2026-10-22",
+        gross_amount: 1000000,
+        withholding_profile: "other_personal_service",
+        other_service_subtype: "broadcast_commentary",
+        other_service_scope_confirmed: true,
+        domestic_payment: true,
+        employment_relationship: false,
+        independent_service: true,
+        activity_continuity: "temporary",
+        special_tax_treatment: false,
+        single_payment_complete: true,
+        expenses_exceed_standard: false,
+        lecture_to_many: false,
+      }] },
+    };
     await client.callTool({ name: "tax_plan_work", arguments: { matter: lectureMatter, include_evidence: true } });
     await client.callTool({ name: "tax_answer_practitioner_question", arguments: {
       matter: lectureMatter, include_evidence: true,
@@ -154,11 +188,17 @@ test("lecture and personal-service calculation facts pass through unchanged with
     await client.callTool({ name: "tax_answer_practitioner_question", arguments: {
       matter: personalServiceMatter, include_evidence: true,
     } });
+    await client.callTool({ name: "tax_plan_work", arguments: { matter: otherServiceMatter, include_evidence: true } });
+    await client.callTool({ name: "tax_answer_practitioner_question", arguments: {
+      matter: otherServiceMatter, include_evidence: true,
+    } });
     assert.deepEqual(calls, [
       ["plan_tax_work", { matter: lectureMatter, include_evidence: true }],
       ["answer_practitioner_question", { matter: lectureMatter, include_evidence: true }],
       ["plan_tax_work", { matter: personalServiceMatter, include_evidence: true }],
       ["answer_practitioner_question", { matter: personalServiceMatter, include_evidence: true }],
+      ["plan_tax_work", { matter: otherServiceMatter, include_evidence: true }],
+      ["answer_practitioner_question", { matter: otherServiceMatter, include_evidence: true }],
     ]);
   } finally {
     await client.close();
