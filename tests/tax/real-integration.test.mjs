@@ -110,7 +110,7 @@ test("installed tax child completes a withholding roundtrip through upper MCP st
     const names = tools.map((tool) => tool.name);
     const taxNames = names.filter((name) => name.startsWith("tax_"));
     const bridgeStatus = await call("agentlink_bridge_status");
-    assert.equal(taxNames.length, 18,
+    assert.equal(taxNames.length, 19,
       `all mapped tax tools should be exposed after real child discovery; status=${JSON.stringify(bridgeStatus)}; tools=${names.join(",")}`);
     for (const name of ["tax_list_workflows", "tax_get_workflow_contract", "tax_plan_work"]) {
       assert.ok(names.includes(name), `missing ${name}`);

@@ -100,9 +100,34 @@ npm run dev
 
 자식 프로세스에는 `PATH, HOME, LANG, LC_ALL, TZ, TMPDIR, PYTHONPATH, AGENTLINK_CREDENTIALS_PATH, AGENTLINK_TAX_REGISTRY, AGENTLINK_AUTOMATION_OFFER_PATH, HTTPS_PROXY, HTTP_PROXY, NO_PROXY`(소문자 변형 포함), `SSL_CERT_FILE, REQUESTS_CA_BUNDLE`만 전달됩니다.
 
-도메인 휠과 같은 승인된 릴리스의 레지스트리 아티팩트가 모두 필요합니다. 휠은 레지스트리를 포함하지 않으므로 `AGENTLINK_TAX_REGISTRY`를 해당 아티팩트 디렉터리로 지정하세요. 휠·레지스트리 설치, MCP 클라이언트 설정, 상태 확인과 실통합 시험은 [세무 전용 설정 안내](docs/TAX_ONLY_SETUP.md)를 참고하세요. 기본 시작은 세무 도메인 도구를 검증하지만 세무 도메인이 없거나 계약이 다르면 상태 도구만 표시합니다.
+세무 도메인 wheel에는 해당 릴리스의 canonical 레지스트리가 포함됩니다. 별도 `AGENTLINK_TAX_REGISTRY` 경로는 배포 환경에서 명시적으로 대체 레지스트리를 사용할 때만 지정하세요. 휠 설치, MCP 클라이언트 설정, 상태 확인과 실통합 시험은 [세무 전용 설정 안내](docs/TAX_ONLY_SETUP.md)를 참고하세요. 기본 시작은 세무 도메인 도구를 검증하지만 세무 도메인이 없거나 계약이 다르면 상태 도구만 표시합니다.
 
-도구 (모두 읽기 전용): `tax_list_workflows`, `tax_get_workflow_contract`, `tax_plan_work`, `tax_get_automation_offer`, `tax_list_rule_cards`, `tax_search_law`, `tax_check_business_status`, `tax_list_practice_cards`, `tax_list_holidays`, `tax_get_schedule`, `tax_find_office`, `tax_search_interpretations`, `tax_get_tribunal_decision`, `tax_search_forms`, `tax_list_form_guides`, `tax_get_form_field_tips`. `tax_plan_work`는 선택 인자 `include_evidence`(서식 원본·근거 후보 첨부)와 `include_filling_guide`(작성 안내 초안 첨부)를 받습니다. 성공 결과는 도메인 서버의 `structuredContent`를 그대로 반환하며(오류 결과의 원문은 전달하지 않고 고정된 안전한 메시지의 `TAX_DOMAIN_TOOL_ERROR`로 대체), 초안일 뿐 적용 여부는 판단되지 않고 세액은 계산하지 않습니다. 호출 제한시간은 30초이며, 실패 시 `tax-bridge-error.v1` (`TAX_DOMAIN_UNAVAILABLE` / `TAX_DOMAIN_TIMEOUT` / `TAX_DOMAIN_TOOL_ERROR` / `TAX_DOMAIN_ERROR`)을 반환합니다.
+도구 (모두 읽기 전용): `tax_list_workflows`, `tax_get_workflow_contract`, `tax_plan_work`, `tax_get_automation_offer`, `tax_list_rule_cards`, `tax_search_law`, `tax_get_law_article`, `tax_check_business_status`, `tax_list_practice_cards`, `tax_list_holidays`, `tax_get_schedule`, `tax_find_office`, `tax_search_interpretations`, `tax_get_tribunal_decision`, `tax_search_forms`, `tax_list_form_guides`, `tax_get_form_field_tips`, `tax_answer_practitioner_question`, `tax_export_rule_cards`. `tax_plan_work`는 선택 인자 `include_evidence`(현행 법령 본문, 해석 후보와 서식 원본 조회)와 `include_filling_guide`(작성 안내 초안 첨부)를 받습니다. `tax_get_law_article`은 법령의 현재 조문 본문과 조회 정보를 반환합니다. `tax_answer_practitioner_question`은 기본적으로 현행 법령 본문·해석 후보·서식 원본을 조회하지 않으며, `include_evidence=true`일 때만 `source_evidence`와 `evidence_lookup` 섹션에 근거 조회 결과를 추가합니다. 현행 본문은 과거 시점 법령이나 사건에 대한 적용 판단이 아니며, 원문 대조 전 상태로 표시됩니다. 성공 결과는 도메인 서버의 `structuredContent`를 그대로 반환하며(오류 결과의 원문은 전달하지 않고 고정된 안전한 메시지의 `TAX_DOMAIN_TOOL_ERROR`로 대체), 초안일 뿐 적용 여부는 판단되지 않고 세액은 계산하지 않습니다. 호출 제한시간은 30초이며, 실패 시 `tax-bridge-error.v1` (`TAX_DOMAIN_UNAVAILABLE` / `TAX_DOMAIN_TIMEOUT` / `TAX_DOMAIN_TOOL_ERROR` / `TAX_DOMAIN_ERROR`)을 반환합니다.
+
+### 오프라인 검사와 필수 라이브 검사
+
+`npm test`와 `npm run test:integration`은 오프라인 회귀 검사입니다. 두 번째 명령은 설치된 wheel을 실제 upper MCP stdio 경로로 실행하지만 외부 법령 조회를 끄고 존재하지 않는 자격증명 경로를 사용합니다. 라이브 승인에 쓸 새 wheel은 세무 도메인 저장소에서 외부 scratch에 빌드하고 새 Python 환경에 비편집 설치합니다.
+`setup.py bdist_wheel`을 실행하는 Python 환경에는 `setuptools`와 `wheel`이 설치되어 있어야 합니다.
+
+```sh
+TASK_SCRATCH=/path/to/external-scratch
+mkdir -p "$TASK_SCRATCH/egg-info" "$TASK_SCRATCH/build" "$TASK_SCRATCH/wheels" "$TASK_SCRATCH/tmp"
+# 세무 도메인 저장소에서:
+cd /path/to/tax-repo/services/tax-mcp
+python3.12 setup.py egg_info --egg-base "$TASK_SCRATCH/egg-info" \
+  build --build-base "$TASK_SCRATCH/build/tax" \
+  bdist_wheel --bdist-dir "$TASK_SCRATCH/build/bdist" --dist-dir "$TASK_SCRATCH/wheels"
+python3.12 -m venv "$TASK_SCRATCH/installed"
+"$TASK_SCRATCH/installed/bin/python" -m pip install \
+  "$TASK_SCRATCH/wheels/agentlink_domain_tax-0.1.0-py3-none-any.whl"
+# 이 저장소에서:
+cd /path/to/upper-mcp
+npm run build
+AGENTLINK_TEST_TAX_PYTHON="$TASK_SCRATCH/installed/bin/python" TMPDIR="$TASK_SCRATCH/tmp" npm run test:integration
+AGENTLINK_TEST_TAX_PYTHON="$TASK_SCRATCH/installed/bin/python" TMPDIR="$TASK_SCRATCH/tmp" npm run test:integration:live
+```
+
+`test:integration:live`는 건너뛰기나 모의 응답 대체가 없는 필수 검사로, 실제 법령정보센터 자격증명과 네트워크를 사용해 전체 조회가 성공해야 합니다. 기본 자격증명 저장소를 쓰려면 `HOME`을 유지하고, 이미 있는 외부 자격증명 파일을 선택할 때는 파일 경로만 `AGENTLINK_CREDENTIALS_PATH`로 전달하세요. 키 값은 브리지 환경, 설정 파일, 로그에 복사하지 않습니다. 라이브 검사는 `PYTHONPATH`, `PYTHONHOME`, `AGENTLINK_TEST_TAX_REGISTRY`, `AGENTLINK_TAX_REGISTRY`, `AGENTLINK_TAX_MCP_PYTHONPATH`가 설정되어 있으면 실패하며, 자격증명·제공처 오류와 부분 조회도 실패로 처리합니다. 세무 도메인 응답의 `evidence_lookup`은 조회 상태·수·안전한 오류 코드를, `legal_evidence`는 현행 본문과 출처·해시·날짜·범위를 담습니다. 본문은 `fetched_text_not_compared`와 `current_law_not_historical` 범위로 남아 적용 판단이나 과거 시점 법령을 확정하지 않습니다.
 
 `automation_offer`는 법률 내용이 아닌 별도 섹션이며, 연락 채널은 `not_configured`일 수 있습니다.
 
