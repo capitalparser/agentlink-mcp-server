@@ -30,7 +30,7 @@ async function connect(taxDomainClient) {
   return { server, client };
 }
 
-test("tool list has 19 read-only tax tools; structuredContent passes through unchanged", async () => {
+test("tool list has 19 read-only tax tools; signed calculation content passes through unchanged", async () => {
   const automation_offer = {
     schema_version: "automation-offer.v1",
     label: "automation_offer_not_legal_content",
@@ -50,7 +50,8 @@ test("tool list has 19 read-only tax tools; structuredContent passes through unc
     pricing_ref: null,
     config_source: "registry_default",
   };
-  const payload = { automation_offer, status: "weird", nested: { applicability: "applies", due: "2026-01-01" }, n: [1, 2] };
+  const payload = { automation_offer, status: "weird", nested: { applicability: "applies", due: "2026-01-01" },
+    calculation: { income_amount: "-200000", expense_excess_amount: "200000" }, n: [1, 2] };
   const calls = [];
   const fake = {
     async callTool(name, args) { calls.push([name, args]); return payload; },
@@ -106,7 +107,8 @@ test("lecture and personal-service calculation facts pass through unchanged with
       }
       for (const phrase of ["original author", "professional knowledge", "analogous broadcasting media",
         "a one-off payment does not establish that classification", "The user-provided classifications remain unverified",
-        "has not inspected or authenticated records"]) {
+        "has not inspected or authenticated records", "above gross", "expense_excess_amount",
+        "zero withholding", "annual netting", "carryforward", "refunds"]) {
         assert.ok(description(name).includes(phrase), `tool description must include ${phrase}`);
       }
       for (const field of ["actual_expense_amount", "actual_expense_scope_confirmed"]) {
@@ -191,7 +193,7 @@ test("lecture and personal-service calculation facts pass through unchanged with
         ...otherServiceMatter.facts.payments[0],
         payment_id: "actual-expense-broadcast-1",
         expenses_exceed_standard: true,
-        actual_expense_amount: 700000,
+        actual_expense_amount: 1200000,
         actual_expense_scope_confirmed: true,
       }] },
     };
