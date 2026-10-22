@@ -1,5 +1,5 @@
 // Optional installed-package integration. Run after `npm run build` with the
-// tax wheel and its separately supplied registry artifact installed.
+// tax wheel (which carries its canonical registry) installed.
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -11,7 +11,8 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 
 const python = process.env.AGENTLINK_TEST_TAX_PYTHON;
 const registry = process.env.AGENTLINK_TEST_TAX_REGISTRY;
-const missingSetup = !python || !existsSync(python) || !registry || !existsSync(registry);
+const missingPython = !python || !existsSync(python);
+const invalidOverride = registry !== undefined && !existsSync(registry);
 const required = process.env.AGENTLINK_REQUIRE_TAX_INTEGRATION === "1";
 const STDERR_LIMIT = 8 * 1024;
 
@@ -47,30 +48,39 @@ function hasKey(value, key) {
 
 test("installed tax child completes a withholding roundtrip through upper MCP stdio", {
   timeout: 90_000,
-  skip: missingSetup && !required
-    ? "Set AGENTLINK_TEST_TAX_PYTHON and AGENTLINK_TEST_TAX_REGISTRY to run the installed tax integration."
+  skip: missingPython && !required && !invalidOverride
+    ? "Set AGENTLINK_TEST_TAX_PYTHON to run the installed tax integration."
     : false,
 }, async () => {
   assert.ok(python && existsSync(python), "AGENTLINK_TEST_TAX_PYTHON must name an installed tax-wheel interpreter");
-  assert.ok(registry && existsSync(registry), "AGENTLINK_TEST_TAX_REGISTRY must name the separately supplied registry artifact");
+  if (registry !== undefined) {
+    assert.ok(existsSync(registry), "AGENTLINK_TEST_TAX_REGISTRY was explicitly set but does not exist");
+  }
+  if (required) {
+    assert.equal(process.env.PYTHONPATH, undefined, "installed mode must not receive a source PYTHONPATH");
+    assert.equal(process.env.PYTHONHOME, undefined, "installed mode must not receive a Python home override");
+  }
 
   const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
   const serverPath = join(root, "dist", "index.js");
   assert.ok(existsSync(serverPath), "build the upper MCP server before running this integration");
 
   const scratch = mkdtempSync(join(tmpdir(), "agentlink-tax-only-integration-"));
+  const childEnv = {
+    PATH: process.env.PATH ?? "",
+    HOME: scratch,
+    TMPDIR: scratch,
+    AGENTLINK_TAX_MCP_COMMAND: python,
+    AGENTLINK_TAX_MCP_ARGS: JSON.stringify(["-I", "-B", "-m", "agentlink_tax.server"]),
+    AGENTLINK_CREDENTIALS_PATH: join(scratch, "intentionally-missing-credentials.json"),
+  };
+  if (registry !== undefined) childEnv.AGENTLINK_TAX_REGISTRY = registry;
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [serverPath],
-    cwd: root,
+    cwd: scratch,
     stderr: "pipe",
-    env: {
-      AGENTLINK_TAX_MCP_COMMAND: python,
-      AGENTLINK_TAX_MCP_ARGS: JSON.stringify(["-B", "-m", "agentlink_tax.server"]),
-      AGENTLINK_TAX_REGISTRY: registry,
-      AGENTLINK_CREDENTIALS_PATH: join(scratch, "intentionally-missing-credentials.json"),
-      TMPDIR: scratch,
-    },
+    env: childEnv,
   });
   const client = new Client({ name: "agentlink-tax-real-integration", version: "0.1.0" });
   let upperStderr = "";
