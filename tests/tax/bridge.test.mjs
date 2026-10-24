@@ -228,6 +228,71 @@ test("lecture and personal-service calculation facts pass through unchanged with
   }
 });
 
+test("annual OTHER inputs and calculated results pass through without upper-layer tax math", async () => {
+  const calls = [];
+  const annualCalculation = {
+    status: "computed",
+    recipient_id: "recipient-test",
+    tax_year: 2026,
+    scope: "full_year_current_law_projection",
+    annual_other_income: "1500002",
+    basic_deduction: "1500000",
+    tax_base: "2",
+    national_calculated_tax: "0.12",
+    local_calculated_tax: "0.012",
+    total_calculated_tax: "0.132",
+    final_payable: null,
+    refund: null,
+  };
+  const planResult = { status: "draft_ready", annual_other_calculation: annualCalculation };
+  const practitionerResult = {
+    final_decision: "not_issued",
+    annual_other_calculation: annualCalculation,
+    assessments: [{ card_id: "tax.wh-calc-annual-other-national", outcome: "computed_value",
+      computed: { value: "0.12", unit: "won", currency: "KRW" } }],
+  };
+  const fake = {
+    async callTool(name, args) {
+      calls.push([name, args]);
+      return name === "plan_tax_work" ? planResult : practitionerResult;
+    },
+    async close() {},
+  };
+  const { client } = await connect(fake);
+  try {
+    const annualFacts = {
+      payments: [],
+      annual_other: {
+        recipient_id: "recipient-test",
+        tax_year: 2026,
+        tax_regime: "comprehensive",
+        cases: [{ case_id: "case-test", kind: "lecture", expense_method: "standard_60",
+          classification_scope_confirmed: true, factual_case_complete_confirmed: true,
+          receipts: [{ receipt_id: "receipt-test", payer_id: "payer-test", recipient_id: "recipient-test",
+            received_on: "2026-10-01", gross_amount: 3750005, record_kind: "actual",
+            expense_record_kind: null, actual_expense_amount: null }] }],
+      },
+    };
+    const matter = { matter_id: "annual-forwarding", workflow_id: "withholding-payment", as_of: "2026-10-22",
+      facts: annualFacts };
+    const planResponse = await client.callTool({ name: "tax_plan_work", arguments: { matter, include_evidence: true } });
+    const answerResponse = await client.callTool({ name: "tax_answer_practitioner_question",
+      arguments: { matter, include_evidence: true } });
+    assert.deepEqual(planResponse.structuredContent, planResult);
+    assert.deepEqual(answerResponse.structuredContent, practitionerResult);
+    assert.deepEqual(JSON.parse(planResponse.content[0].text), planResult);
+    assert.deepEqual(JSON.parse(answerResponse.content[0].text), practitionerResult);
+    assert.deepEqual(calls, [
+      ["plan_tax_work", { matter, include_evidence: true }],
+      ["answer_practitioner_question", { matter, include_evidence: true }],
+    ]);
+    assert.equal(planResponse.structuredContent.annual_other_calculation.total_calculated_tax, "0.132",
+      "the upper bridge must preserve fractional annual tax values exactly");
+  } finally {
+    await client.close();
+  }
+});
+
 test("practitioner tools forward arguments and reject invalid ranges before domain calls", async () => {
   const calls = [];
   const fake = { async callTool(name, args) { calls.push([name, args]); return {}; }, async close() {} };
