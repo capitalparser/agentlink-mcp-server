@@ -1,4 +1,6 @@
-# Annual OTHER cloud continuation
+# Annual OTHER continuation — historical cloud checklist
+
+**Latest user direction: continue on MacBook. Read ANNUAL_OTHER_MACBOOK_HANDOFF.md first. Do not launch another cloud task.**
 
 Draft checkpoint, 2026-10-24. Finish the annual-other bridge changes on branch `test/tax-annual-other-20261022`; do not assume release readiness. Native runtime is an independently installed dependency.
 
