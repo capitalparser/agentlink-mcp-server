@@ -10,6 +10,7 @@ import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { runAnnualOtherLive, runAnnualOtherNoCredentials } from "./annual-other-live.mjs";
 
 const OVERRIDE_KEYS = [
   "PYTHONPATH", "PYTHONHOME", "AGENTLINK_TEST_TAX_REGISTRY", "AGENTLINK_TAX_REGISTRY",
@@ -1267,16 +1268,22 @@ actual_expense_rule_ids = sorted(str(row.get("id", "")) for row in rule_rows
     if str(row.get("id", "")) in {"WH-CALC-OTHER-ACTUAL-SCOPE", "WH-CALC-OTHER-ACTUAL-WITHHOLDING"})
 loss_scope_rule_ids = sorted(str(row.get("id", "")) for row in rule_rows
     if str(row.get("id", "")) == "WH-CALC-OTHER-LOSS-SCOPE")
+annual_rule_ids = sorted(str(row.get("id", "")) for row in rule_rows
+    if str(row.get("id", "")).startswith("WH-CALC-ANNUAL-OTHER-"))
+annual_module = package / "workflows" / "annual_other.py"
 print(json.dumps({
     "package_installed": package.is_relative_to(site_packages),
     "registry_bundled": registry.is_relative_to(package) and required_assets <= assets,
-    "calculation_rules_bundled": withholding_rules.is_file() and calculation_rule_count == 22 and
+    "calculation_rules_bundled": withholding_rules.is_file() and calculation_rule_count == 30 and
         personal_service_rule_ids == ["WH-CALC-PERSONAL-CREATIVE", "WH-CALC-PERSONAL-ENTERTAINMENT",
             "WH-CALC-PERSONAL-LANGUAGE"] and
         other_personal_service_rule_ids == ["WH-CALC-OTHER-ADVISORY", "WH-CALC-OTHER-BROADCAST",
             "WH-CALC-OTHER-MANUSCRIPT", "WH-CALC-OTHER-SERVICE"] and
         actual_expense_rule_ids == ["WH-CALC-OTHER-ACTUAL-SCOPE", "WH-CALC-OTHER-ACTUAL-WITHHOLDING"] and
         loss_scope_rule_ids == ["WH-CALC-OTHER-LOSS-SCOPE"] and
+        annual_rule_ids == ["WH-CALC-ANNUAL-OTHER-BASE-ROUND", "WH-CALC-ANNUAL-OTHER-DEDUCTION",
+            "WH-CALC-ANNUAL-OTHER-EXPENSE", "WH-CALC-ANNUAL-OTHER-LOCAL", "WH-CALC-ANNUAL-OTHER-LOSS",
+            "WH-CALC-ANNUAL-OTHER-NATIONAL", "WH-CALC-ANNUAL-OTHER-REGIME", "WH-CALC-ANNUAL-OTHER-SCOPE"] and
         any(str(row.get("id", "")) == "WH-CALC-OTHER-EXPENSE" for row in rule_rows) and
         "business_lecture" in withholding_workflow.get("description", "") and
         "other_lecture" in withholding_workflow.get("description", "") and
@@ -1287,6 +1294,7 @@ print(json.dumps({
         "broadcast_commentary" in withholding_workflow.get("description", "") and
         "actual_expense_amount" in withholding_workflow.get("description", "") and
         "actual_expense_scope_confirmed" in withholding_workflow.get("description", ""),
+    "annual_module_bundled": annual_module.is_file(),
     "editable": editable,
     "credential_present": CredentialStore().has(LAW_GO_KR),
 }, separators=(",", ":")))
@@ -1301,7 +1309,8 @@ print(json.dumps({
   same(facts.package_installed, true, "Tax package must import from installed site-packages");
   same(facts.registry_bundled, true, "Canonical JSON registry must be bundled with the installed package");
   same(facts.calculation_rules_bundled, true,
-    "All supported lecture, personal-service, other-personal-service, actual-expense, and conditional loss-scope rule cards must be bundled with the installed package");
+    "All supported lecture, personal-service, other-personal-service, actual-expense, loss-scope, and annual OTHER rule cards must be bundled with the installed package");
+  same(facts.annual_module_bundled, true, "Annual OTHER calculation module must be bundled with the installed package");
   same(facts.editable, false, "Installed tax package must not be editable");
   same(facts.credential_present, true, "Existing law.go.kr credential must be available to the installed child");
 }
@@ -1354,6 +1363,9 @@ test("installed wheel returns current law and opted-in withholding evidence thro
   for (const key of OVERRIDE_KEYS) same(process.env[key], undefined, "Source and registry overrides are not allowed");
   must(process.env.HOME && existsSync(process.env.HOME), "The real credential-store home must be available");
   must(existsSync(serverPath), "Build the upper MCP server before running required live acceptance");
+  must(existsSync(join(dirname(fileURLToPath(import.meta.url)), "annual-other-live.mjs")) &&
+    typeof runAnnualOtherLive === "function" && typeof runAnnualOtherNoCredentials === "function",
+  "Annual installed-wheel acceptance helper must be present");
 
   const scratch = mkdtempSync(join(taskTemp, "tax-live-acceptance-"));
   chmodSync(scratch, 0o700);
@@ -2878,7 +2890,9 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         assertPractitionerCalculationSection(otherPersonalServiceAnswer, practitionerExpected);
       }
 
-      savePrivateLiveReceipt({ business_plan: businessPlan.result, other_plan: otherPlan.result,
+      const annualReceipt = await runAnnualOtherLive({ call, calculationDate, must, same, equivalent });
+      savePrivateLiveReceipt({ annual_other: annualReceipt,
+        business_plan: businessPlan.result, other_plan: otherPlan.result,
         other_personal_service_plan: otherPersonalPlan.result,
         personal_service_plan: personalServicePlan.result, personal_service_boundary_plan: personalBoundaryPlan.result,
         actual_expense_plan: actualExpensePlan.result,
@@ -2898,7 +2912,7 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         practitioner_other_loss_lecture_answer: lossPractitionerAnswers.lecture,
         practitioner_other_loss_manuscript_answer: lossPractitionerAnswers.manuscript });
 
-      const allLive = JSON.stringify([search, article, withEvidence, answer, businessPlan.result, otherPlan.result,
+      const allLive = JSON.stringify([search, article, withEvidence, answer, annualReceipt, businessPlan.result, otherPlan.result,
         otherPersonalPlan.result, actualExpensePlan.result, personalServicePlan.result, personalBoundaryPlan.result,
         lossPlan.result, paymentIsolationPlan.result, paymentIsolationAnswer,
         ...Object.values(actualExpensePractitionerAnswers), ...Object.values(lossPractitionerAnswers),
@@ -2926,6 +2940,11 @@ test("installed wheel returns current law and opted-in withholding evidence thro
         loss_practitioner_answers: Object.keys(lossPractitionerAnswers).length,
         payment_isolation_calculations: paymentIsolationPlan.result.withholding_calculations.length,
         personal_service_calculations: personalServicePlan.result.withholding_calculations.length,
+        annual_calculations: annualReceipt.summary.annual_calculations,
+        annual_practitioner_answers: annualReceipt.summary.practitioner_answers,
+        annual_negative_cases: annualReceipt.summary.negative_cases,
+        annual_rule_cards: annualReceipt.summary.annual_cards,
+        annual_legal_documents: annualReceipt.summary.annual_documents,
         budget_retry_calls: retryBudget.used,
       }) + "\n");
     });
@@ -2933,6 +2952,11 @@ test("installed wheel returns current law and opted-in withholding evidence thro
     const missingCredentialPath = join(scratch, "intentionally-missing-credentials.json");
     must(!existsSync(missingCredentialPath), "Negative credential fixture must begin absent");
     await withUpper(scratch, missingCredentialPath, async (_client, call) => {
+      const annualMissingCredentials = await runAnnualOtherNoCredentials({ call, calculationDate, must, same });
+      must(!JSON.stringify(annualMissingCredentials).includes(missingCredentialPath),
+        "Annual missing-credential output must not expose the local credential path");
+      must(!JSON.stringify(annualMissingCredentials).includes("OC="),
+        "Annual missing-credential output must not expose authenticated transport parameters");
       const missingCredentialMatter = calculationMatter([
         lecturePayment("business_lecture", 33333, "missing-credential-lecture", calculationDate),
         personalServicePayment("translation", 33333, "missing-credential-personal-service", calculationDate),
